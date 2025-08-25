@@ -1,8 +1,7 @@
-from ..db.base_class import Base
+from backend.db.base_class import Base
 from typing import Optional
 from sqlalchemy import ForeignKey, String, TIMESTAMP, Text, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from db_application import Application
 from datetime import datetime, timezone
 import uuid
 

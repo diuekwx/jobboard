@@ -1,9 +1,8 @@
-from ..db.base_class import Base
+from backend.db.base_class import Base
 from typing import Optional
 from sqlalchemy import ForeignKey, String, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from db_application import Application
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 
@@ -17,6 +16,6 @@ class Event(Base):
     start_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     end_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     google_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc))
 
     application: Mapped["Application"] = relationship(back_populates="events")

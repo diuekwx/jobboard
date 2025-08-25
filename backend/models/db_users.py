@@ -1,11 +1,10 @@
-from ..db.base_class import Base
+from backend.db.base_class import Base
 from typing import List
 from sqlalchemy import String, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
-from db_application import Application
 from datetime import datetime, timezone
 import uuid
 
