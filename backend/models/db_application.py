@@ -17,7 +17,6 @@ class Application(Base):
     position: Mapped[str] = mapped_column(String(100))
     application_date: Mapped[datetime] = mapped_column(Date, default=datetime.now(timezone.utc))
     status: Mapped[str] = mapped_column(String(20), default="applied")
-    job_posting_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
