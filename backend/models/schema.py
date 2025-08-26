@@ -10,8 +10,8 @@ class UserOut(BaseModel):
     id: UUID
     email: EmailStr
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
+
 
 class ApplicationCreate(BaseModel):
     company: str
@@ -22,8 +22,8 @@ class ApplicationOut(BaseModel):
     company: str
     position: str
 
-    class Config:
-        orm_mode: True
+    model_config = {"from_attributes": True}
+
 
 # | None = None vs Optional  
 class EditApplication(BaseModel):
@@ -37,5 +37,4 @@ class EditApplicationOut(BaseModel):
     id: UUID
     user_id: UUID
 
-    class config: 
-        orm_model = True
+    model_config = {"from_attributes": True}
