@@ -21,6 +21,10 @@ class Application(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
     user: Mapped["User"] = relationship(back_populates="applications")
-    responses: Mapped[List["RecruiterResponse"]] = relationship(back_populates="application", cascade="all, delete")
-    events: Mapped[List["Event"]] = relationship(back_populates="application", cascade="all, delete")
+    
+from backend.models.db_response import RecruiterResponse
+from backend.models.db_event import Event
+
+Application.responses = relationship("RecruiterResponse", back_populates="application", cascade="all, delete")
+Application.events = relationship("Event", back_populates="application", cascade="all, delete")
 
