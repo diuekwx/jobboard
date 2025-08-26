@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import Depends, HTTPException, status
-from ..models.db_users import User
-from ..db.session import get_db
+from backend.models.db_users import User
+from backend.db.session import get_db
 import os
 from fastapi import HTTPException
 
@@ -30,7 +30,7 @@ def verify_password(plain_password, hashed_password):
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
-    expire = timezone.utc + (expires_delta or timedelta(minutes=15))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, secret_key, algorithm=algorithm)
 

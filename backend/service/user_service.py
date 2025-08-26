@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from ..models.db_users import User
-from ..core.auth import hash_password, verify_password, create_access_token
+from backend.models.db_users import User
+from backend.core.auth import hash_password, verify_password, create_access_token
 
 def register_user(db: Session, email: str, password: str) -> User:
     existing_user = db.query(User).filter(User.email == email).first()
