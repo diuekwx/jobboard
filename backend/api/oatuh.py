@@ -49,16 +49,11 @@ def auth_google_callback(request: Request, code: str, current_user: User = Depen
 
     credentials = flow.credentials
 
-    # Store in DB (IntegrationToken)
     sending = CredentialCreate(user_id = current_user.id,
                             access_token=credentials.token, 
                             refresh_token=credentials.refresh_token,
                             expires_at=credentials.expiry)
-
-    # Save for the logged-in user in integration_tokens table
-    # (pseudo code)
     
     save_credentials(db, sending)
-    # db.save(IntegrationToken(user_id=current_user.id, provider="gmail", ...))
 
     return {"message": "Gmail connected!"}
