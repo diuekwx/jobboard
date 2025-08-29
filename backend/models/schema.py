@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from typing import Optional
+import datetime
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -38,3 +39,10 @@ class EditApplicationOut(BaseModel):
     user_id: UUID
 
     model_config = {"from_attributes": True}
+
+
+class CredentialCreate(BaseModel):
+    user_id: UUID
+    access_token: str
+    refresh_token: str
+    expires_at: datetime
