@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from typing import Optional
-import datetime
+from datetime import datetime
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -20,7 +20,7 @@ class ApplicationCreate(BaseModel):
     status: str
 
 class ApplicationOut(BaseModel):
-    company: str
+    company_name: str
     position: str
 
     model_config = {"from_attributes": True}
