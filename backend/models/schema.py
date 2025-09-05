@@ -46,3 +46,6 @@ class CredentialCreate(BaseModel):
     access_token: str
     refresh_token: str
     expires_at: datetime
+
+class GoogleCreate(BaseModel):
+    email: str

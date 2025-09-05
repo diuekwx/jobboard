@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.orm import Session
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import os
 from dotenv import load_dotenv
-from backend.models.schema import CredentialCreate
+from backend.models.schema import CredentialCreate, GoogleCreate
 from backend.models.db_users import User
 from backend.core.dependencies import get_current_user, get_db
 from backend.service.oauth_service import save_credentials
-
+from backend.service.user_service import get_user_by_email, create_new_google
+from googleapiclient.discovery import build 
+from backend.core.auth import create_access_token
 
 load_dotenv()
 
@@ -23,31 +25,58 @@ client_config = {
     }
 }
 router = APIRouter()
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/gmail.metadata"]
 
 @router.get("/auth/google")
-def auth_google():
+def auth_google(request: Request):
     flow = Flow.from_client_config(
     client_config,
-    scopes=SCOPES,
+    scopes=os.getenv("SCOPES"),
     redirect_uri=os.getenv("GOOGLE_REDIRECT_URI")
     )
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true"
     )
+    # ?? 
+    request.session["google_oauth_state"] = state
+
     return {"auth_url": auth_url}
 
 @router.get("/auth/google/callback")
-def auth_google_callback(request: Request, code: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def auth_google_callback(request: Request, code: str, state: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    stored_state = request.session.pop("google_oauth_state", None)
+
+    if not stored_state or stored_state != state:
+        raise HTTPException(status_code=400, detail="State parameter mismatch.")
+    
     flow = Flow.from_client_config(
         client_config,
-        scopes=SCOPES,
+        scopes=os.getenv("SCOPES"),
         redirect_uri=os.getenv("GOOGLE_REDIRECT_URI")
     )
     flow.fetch_token(code=code)
 
     credentials = flow.credentials
+
+
+
+    service = build('oauth2', 'v2', credentials=credentials)
+    user_info = service.userinfo().get().execute()
+
+    user_email = user_info.get("email")
+    user_name = user_info.get("name")
+
+    if not user_email:
+        raise HTTPException(status_code=400, detail="cant retrieve email")
+    
+    db_user = get_user_by_email(db, user_email)
+
+    if not db_user:
+        new_user_data = GoogleCreate(email=user_email)
+        db_user = create_new_google(db, new_user_data)
+
+    app_access_token = create_access_token(data=db_user.email)
+
 
     sending = CredentialCreate(user_id = current_user.id,
                             access_token=credentials.token, 
@@ -56,4 +85,5 @@ def auth_google_callback(request: Request, code: str, current_user: User = Depen
     
     save_credentials(db, sending)
 
-    return {"message": "Gmail connected!"}
+    return {"access_token":app_access_token, "token_type":"bearer", "message": "Gmail connected!"}
+
