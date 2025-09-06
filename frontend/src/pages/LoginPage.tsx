@@ -43,14 +43,21 @@ export default function LoginPage() {
       }
   }
 
-  const handleGoogleSignIn = async () => {
-
-      window.location.href = `${API_BASE_URL}/gmail/auth/google`;
-    
-    
-    console.log("Google Sign-In clicked!");
-  };
-
+const handleGoogleSignIn = async () => {
+  const response = await fetch(`${API_BASE_URL}/gmail/auth/google`, {
+    method: "GET",
+    credentials: "include"
+  });
+  if (!response.ok){
+    console.log("error");
+    return;
+  }
+  const data = await response.json();
+  if (data.auth_url){
+    await new Promise(res => setTimeout(res, 500));
+    window.location.href = data.auth_url;
+  }
+};
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0f172a]">
       <div className="bg-[#1e293b] p-8 rounded-2xl shadow-lg w-full max-w-md">
