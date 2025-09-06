@@ -24,9 +24,9 @@ def login_user(db: Session, email: str, password: str) -> str:
     return create_access_token(data={"sub": email})
 
 def create_new_google(db: Session, data: GoogleCreate):
-    new_user = User(email=GoogleCreate.email)
+    new_user = User(email=data.email)
     db.add(new_user)
-    db.commit
+    db.commit()
     db.refresh(new_user)
     return new_user
 

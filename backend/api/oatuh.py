@@ -11,6 +11,7 @@ from backend.service.oauth_service import save_credentials
 from backend.service.user_service import get_user_by_email, create_new_google
 from googleapiclient.discovery import build 
 from backend.core.auth import create_access_token
+import uuid
 
 load_dotenv()
 
@@ -26,32 +27,56 @@ client_config = {
 }
 router = APIRouter()
 
+_state_store = {}
+
 @router.get("/auth/google")
 def auth_google(request: Request):
+    scopes = os.getenv("SCOPES").split()
+
+    state_id = str(uuid.uuid4())
+    state_param = "some_random_state"
+
+    _state_store[state_id] = state_param
+
+
     flow = Flow.from_client_config(
     client_config,
-    scopes=os.getenv("SCOPES"),
+    scopes=scopes,
     redirect_uri=os.getenv("GOOGLE_REDIRECT_URI")
     )
     auth_url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true"
+        include_granted_scopes="true",
+        prompt="consent"
     )
     # ?? 
     request.session["google_oauth_state"] = state
+    print(f"state: {state}")
+    print("Session before return:", request.session)
+    print("Session contents:", request.session)
+    stored_state = request.session.get("google_oauth_state")
+    print(f"stored state: {stored_state}")
 
     return {"auth_url": auth_url}
 
 @router.get("/auth/google/callback")
-def auth_google_callback(request: Request, code: str, state: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    stored_state = request.session.pop("google_oauth_state", None)
-
+# def auth_google_callback(request: Request, code: str, state: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def auth_google_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)):
+    # stored_state = request.session.pop("google_oauth_state", None)
+    print("Session contents:", request.session)
+    stored_state = request.session.get("google_oauth_state")
+    if stored_state:
+        print(f"Stored state: {stored_state}")
     if not stored_state or stored_state != state:
+        print(f"Stored state: {stored_state}")
+        print(f"Received state: {state}")
         raise HTTPException(status_code=400, detail="State parameter mismatch.")
     
+    scopes = os.getenv("SCOPES").split()
+
     flow = Flow.from_client_config(
         client_config,
-        scopes=os.getenv("SCOPES"),
+        scopes=scopes,
         redirect_uri=os.getenv("GOOGLE_REDIRECT_URI")
     )
     flow.fetch_token(code=code)
@@ -59,31 +84,36 @@ def auth_google_callback(request: Request, code: str, state: str, current_user: 
     credentials = flow.credentials
 
 
-
     service = build('oauth2', 'v2', credentials=credentials)
     user_info = service.userinfo().get().execute()
 
     user_email = user_info.get("email")
-    user_name = user_info.get("name")
 
     if not user_email:
         raise HTTPException(status_code=400, detail="cant retrieve email")
-    
+
     db_user = get_user_by_email(db, user_email)
 
     if not db_user:
         new_user_data = GoogleCreate(email=user_email)
         db_user = create_new_google(db, new_user_data)
 
-    app_access_token = create_access_token(data=db_user.email)
+    if not db_user:
+        raise HTTPException(status_code=400, detail="User creation failed")
+    print(f"db user: {db_user}")
+    app_access_token = create_access_token(data={"sub": db_user.email})
+    print("access otken made")
 
+    print(f"credentials: {credentials}")
+    sending = CredentialCreate(
+                        user_id = db_user.id,
+                        access_token=credentials.token, 
+                        refresh_token=credentials.refresh_token,
+                        expires_at=credentials.expiry)
+    print("credite made")
 
-    sending = CredentialCreate(user_id = current_user.id,
-                            access_token=credentials.token, 
-                            refresh_token=credentials.refresh_token,
-                            expires_at=credentials.expiry)
-    
     save_credentials(db, sending)
+    print("credite saved")
 
     return {"access_token":app_access_token, "token_type":"bearer", "message": "Gmail connected!"}
 

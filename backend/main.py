@@ -12,6 +12,7 @@ from starlette.middleware.sessions import SessionMiddleware
 app = FastAPI(title="J*b")
 
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -20,9 +21,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+#none and false
 app.add_middleware(
     SessionMiddleware,
-    secret_key = os.getenv("SESSION_SECRET_KEY")
+    secret_key = os.getenv("SESSION_SECRET_KEY", "lol"),
+    same_site = "lax",
+    https_only=False
 )
 
 
