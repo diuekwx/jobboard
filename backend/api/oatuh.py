@@ -12,6 +12,8 @@ from backend.service.user_service import get_user_by_email, create_new_google
 from googleapiclient.discovery import build 
 from backend.core.auth import create_access_token
 import uuid
+from fastapi.responses import RedirectResponse
+
 
 load_dotenv()
 
@@ -100,20 +102,20 @@ def auth_google_callback(request: Request, code: str, state: str, db: Session = 
 
     if not db_user:
         raise HTTPException(status_code=400, detail="User creation failed")
-    print(f"db user: {db_user}")
-    app_access_token = create_access_token(data={"sub": db_user.email})
-    print("access otken made")
 
-    print(f"credentials: {credentials}")
+    app_access_token = create_access_token(data={"sub": db_user.email})
+
+
+
     sending = CredentialCreate(
                         user_id = db_user.id,
                         access_token=credentials.token, 
                         refresh_token=credentials.refresh_token,
                         expires_at=credentials.expiry)
-    print("credite made")
+
 
     save_credentials(db, sending)
-    print("credite saved")
+    frontend_redirect = os.getenv("FRONTEND_REDIRECT")
 
-    return {"access_token":app_access_token, "token_type":"bearer", "message": "Gmail connected!"}
-
+    # return {"access_token":app_access_token, "token_type":"bearer", "message": "Gmail connected!"}
+    return RedirectResponse(url=frontend_redirect)
