@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from backend.models.db_users import User
 from backend.models.schema import GoogleCreate
-from backend.core.auth import hash_password, verify_password, create_access_token
+from backend.core.auth import hash_password, verify_password, create_access_token, recieve_jwt
 
 def register_user(db: Session, email: str, password: str) -> User:
     existing_user = db.query(User).filter(User.email == email).first()
@@ -21,7 +21,8 @@ def login_user(db: Session, email: str, password: str) -> str:
     if not db_user or not verify_password(password, db_user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
     
-    return create_access_token(data={"sub": email})
+    jwt = create_access_token(data={"sub": email})
+    return jwt
 
 def create_new_google(db: Session, data: GoogleCreate):
     new_user = User(email=data.email)
@@ -30,6 +31,14 @@ def create_new_google(db: Session, data: GoogleCreate):
     db.refresh(new_user)
     return new_user
 
+def login_goolge(email: str) -> str:
+    jwt = create_access_token(data={"sub": email})
+    return jwt    
+
 
 def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
+
+
+def decode_jwt(token: str) -> str:
+    return recieve_jwt(token)

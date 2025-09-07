@@ -9,6 +9,7 @@ from backend.models.db_users import User
 from backend.db.session import get_db
 import os
 from fastapi import HTTPException
+from jose import jwt
 
 
 load_dotenv()
@@ -32,6 +33,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
+    
     return jwt.encode(to_encode, secret_key, algorithm=algorithm)
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -52,3 +54,6 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+
+def recieve_jwt(token: str):
+    return jwt.decode(token, secret_key, algorithm)
