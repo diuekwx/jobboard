@@ -44,7 +44,7 @@ class EditApplicationOut(BaseModel):
 class CredentialCreate(BaseModel):
     user_id: UUID
     access_token: str
-    refresh_token: str
+    refresh_token: Optional[str] = None
     expires_at: datetime
 
 class GoogleCreate(BaseModel):
