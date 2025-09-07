@@ -1,14 +1,13 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 import os
 from dotenv import load_dotenv
 from backend.models.schema import CredentialCreate, GoogleCreate
-from backend.models.db_users import User
-from backend.core.dependencies import get_current_user, get_db
+from backend.core.dependencies import get_db
 from backend.service.oauth_service import save_credentials
-from backend.service.user_service import get_user_by_email, create_new_google
+from backend.service.user_service import get_user_by_email, create_new_google, login_goolge
 from googleapiclient.discovery import build 
 from backend.core.auth import create_access_token
 import uuid
@@ -65,13 +64,10 @@ def auth_google(request: Request):
 # def auth_google_callback(request: Request, code: str, state: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
 def auth_google_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)):
     # stored_state = request.session.pop("google_oauth_state", None)
-    print("Session contents:", request.session)
+
     stored_state = request.session.get("google_oauth_state")
-    if stored_state:
-        print(f"Stored state: {stored_state}")
+
     if not stored_state or stored_state != state:
-        print(f"Stored state: {stored_state}")
-        print(f"Received state: {state}")
         raise HTTPException(status_code=400, detail="State parameter mismatch.")
     
     scopes = os.getenv("SCOPES").split()
@@ -103,7 +99,7 @@ def auth_google_callback(request: Request, code: str, state: str, db: Session = 
     if not db_user:
         raise HTTPException(status_code=400, detail="User creation failed")
 
-    app_access_token = create_access_token(data={"sub": db_user.email})
+    # app_access_token = create_access_token(data={"sub": db_user.email})
 
 
 
@@ -117,5 +113,14 @@ def auth_google_callback(request: Request, code: str, state: str, db: Session = 
     save_credentials(db, sending)
     frontend_redirect = os.getenv("FRONTEND_REDIRECT")
 
+    jwt = login_goolge(user_email)
+    response = RedirectResponse(url=frontend_redirect)
+    response.set_cookie(
+        key="access_token",
+        value=jwt,
+        httponly=True,
+        secure=False,
+        samesite="lax")
+
     # return {"access_token":app_access_token, "token_type":"bearer", "message": "Gmail connected!"}
-    return RedirectResponse(url=frontend_redirect)
+    return response
