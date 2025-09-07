@@ -22,23 +22,21 @@ export default function LoginPage() {
           credentials: "include",
           method: "POST",
           headers: {
-            'Content-Type': "application/json"
+            'Content-Type': "application/json",
+            credentials: "include"
           },
           body: JSON.stringify({
               email: `${name}`,
               password: `${password}`
           })
         })
-
+        const data = await response.json()
         if (response.ok){
           navigate('/Dashboard');
         }
-        else{
-          console.log(name)
-        }
+
       }
       catch (error){
-        console.log(error);
         setError("An error occurred. Please try again later.");
       }
   }
@@ -58,6 +56,7 @@ const handleGoogleSignIn = async () => {
     window.location.href = data.auth_url;
   }
 };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0f172a]">
       <div className="bg-[#1e293b] p-8 rounded-2xl shadow-lg w-full max-w-md">
