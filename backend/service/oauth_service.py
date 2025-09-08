@@ -2,6 +2,13 @@ from sqlalchemy.orm import Session
 from backend.models.schema import CredentialCreate
 from backend.models.db_integrationtokens import IntegrationToken
 from uuid import UUID
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+
+import os 
+
 
 def save_credentials(db: Session, data: CredentialCreate):
 
@@ -22,7 +29,7 @@ def save_credentials(db: Session, data: CredentialCreate):
 
         credentials = IntegrationToken(
             user_id = data.user_id,
-            provider = "Gmail",
+            provider = "gmail",
 
             access_token = data.access_token,
             refresh_token = data.refresh_token,
@@ -31,10 +38,6 @@ def save_credentials(db: Session, data: CredentialCreate):
     db.commit()
 
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from sqlalchemy.orm import Session
-from datetime import datetime, timezone
 
 def refresh_google_token(db: Session, integration_token: IntegrationToken) -> IntegrationToken:
     creds = Credentials(

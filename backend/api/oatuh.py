@@ -48,7 +48,7 @@ def auth_google(request: Request):
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent"
+        # prompt="consent"
     )
     # ?? 
     request.session["google_oauth_state"] = state
@@ -100,8 +100,6 @@ def auth_google_callback(request: Request, code: str, state: str, db: Session = 
         raise HTTPException(status_code=400, detail="User creation failed")
 
     # app_access_token = create_access_token(data={"sub": db_user.email})
-
-
 
     sending = CredentialCreate(
                         user_id = db_user.id,
