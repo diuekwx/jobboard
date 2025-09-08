@@ -53,17 +53,18 @@ def fetch_job_applications(current_user: User = Depends(get_current_user), db: S
                 email_date = header['value']
             elif header['name'] == 'Subject':
                 email_subject = header['value']
-
+                print(email_subject)
+        
         company = extract_company_spacy(email_subject)
 
         if company is None:
             company = extract_company(email_subject)
-        
+
         fetched_applications.append({
             "id": full_msg["id"],
-            "subject": email_subject,
             "company": company,
-            "date": email_date
+            "date": email_date,
+            "status": "sent"
         })
     
     return {"message": "Emails fetched successfully", "applications": fetched_applications} 
