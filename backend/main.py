@@ -6,7 +6,7 @@ from backend.api.user import router as user_router
 from backend.api.jobs import router as job_router
 from backend.api.oatuh import router as gmail_router
 from backend.api.gmail import router as gmail_endpoint_router
-from backend.api.gmail import router as sync_router
+from backend.api.sync import router as sync_router
 import os 
 from starlette.middleware.sessions import SessionMiddleware
 
