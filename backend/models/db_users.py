@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
-from backend.models.db_application import Application
+# from backend.models.db_application import Application
 import uuid
 
 
@@ -19,5 +19,8 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc))
     
 
-    applications: Mapped[List["Application"]] = relationship(back_populates="user", cascade="all, delete")
-    integration_tokens: Mapped[List["IntegrationToken"]] = relationship(back_populates="user", cascade="all, delete")
+    applications: Mapped[List["Application"]] = relationship("Application", back_populates="user", cascade="all, delete")
+    integration_tokens: Mapped[List["IntegrationToken"]] = relationship("IntegrationToken", back_populates="user", cascade="all, delete")
+
+from backend.models.db_applicationsync import ApplicationSync
+User.application_sync = relationship("ApplicationSync", back_populates="user", uselist=False, cascade="all, delete")
