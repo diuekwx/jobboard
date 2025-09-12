@@ -5,17 +5,18 @@ from datetime import datetime
 import uuid
 from backend.models.schema import EditApplication, ApplicationCreate
 
-def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate, time: datetime):
+def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate):
+    # position maybe
     exisiting_job = db.query(Application).filter(Application.company_name == data.company,
-                                                 Application.position == data.position,
+                                                 
                                                  Application.user_id == user_id).first()
     if exisiting_job:
         raise HTTPException(status_code=400, detail="Job already added")
     new_job = Application(user_id = user_id, 
                           company_name= data.company, 
                           position = data.position, 
-                          status="Sent", 
-                          application_date = time)
+                          status= data.status, 
+                          application_date = data.time)
     db.add(new_job)
     db.commit()
     db.refresh(new_job)

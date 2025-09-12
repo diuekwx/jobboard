@@ -10,6 +10,7 @@ import os
 from backend.service.gmail_service import extract_company, extract_company_spacy
 from backend.service.jobs_service import create_job_service
 from backend.service.sync_service import sync, get_last_updated, update_sync_after_fetch
+from backend.models.schema import ApplicationCreate
 from datetime import datetime, timezone
 
 router = APIRouter(tags=["gmail"])
@@ -84,6 +85,12 @@ def fetch_job_applications(current_user: User = Depends(get_current_user), db: S
             "date": email_date,
             "status": "sent"
         })
+        # obviously change inputs later
+        job = ApplicationCreate(company=company, 
+                                position="swe intern", 
+                                status="sent", 
+                                time=datetime.now(timezone.utc))
+        create_job_service(db, current_user.id, job)
 
     
     update_sync_after_fetch(db, current_user.id)

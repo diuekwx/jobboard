@@ -11,7 +11,7 @@ class Application(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
 
-    company_name: Mapped[str] = mapped_column(String(100))
+    company_name: Mapped[str] = mapped_column(String(100), default="Company Name Not Found")
     position: Mapped[str] = mapped_column(String(100))
     application_date: Mapped[datetime] = mapped_column(Date, default=datetime.now(timezone.utc))
     status: Mapped[str] = mapped_column(String(20), default="applied")

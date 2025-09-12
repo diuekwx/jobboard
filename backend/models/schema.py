@@ -15,14 +15,14 @@ class UserOut(BaseModel):
 
 
 class ApplicationCreate(BaseModel):
-    company: str
+    company: Optional[str] = None
     position: str
     status: str
+    time: datetime
 
 class ApplicationOut(BaseModel):
     company_name: str
     position: str
-
     model_config = {"from_attributes": True}
 
 
