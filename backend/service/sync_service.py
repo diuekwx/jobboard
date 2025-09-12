@@ -28,7 +28,7 @@ def sync(db: Session, user_id: uuid, day: datetime):
         new_sync = ApplicationSync(
             user_id=user_id,
             start_date=day,
-            last_synced_at=dt_utc,
+            # last_synced_at=day,
             created_at=dt_utc,
             updated_at=dt_utc
         )

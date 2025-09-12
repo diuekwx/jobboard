@@ -49,3 +49,6 @@ class CredentialCreate(BaseModel):
 
 class GoogleCreate(BaseModel):
     email: str
+
+class DateCreate(BaseModel):
+    day: datetime
