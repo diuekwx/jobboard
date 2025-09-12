@@ -5,6 +5,8 @@ from backend.db.session import get_db
 from backend.api.user import router as user_router
 from backend.api.jobs import router as job_router
 from backend.api.oatuh import router as gmail_router
+from backend.api.gmail import router as gmail_endpoint_router
+from backend.api.gmail import router as sync_router
 import os 
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -33,6 +35,9 @@ app.add_middleware(
 app.include_router(user_router, prefix="/api") 
 app.include_router(job_router, prefix="/job") 
 app.include_router(gmail_router, prefix="/gmail")
+app.include_router(gmail_endpoint_router, prefix="/gmail-service")
+app.include_router(sync_router, prefix="/sync")
+
 
 @app.get("/")
 def read_root():
