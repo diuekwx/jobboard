@@ -38,10 +38,15 @@ def sync(db: Session, user_id: uuid, day: datetime):
 
         return new_sync
 
+def get_start_date(db: Session, user_id: uuid):
+    find = db.query(ApplicationSync).filter(ApplicationSync.user_id == user_id).first()
+    if find:
+        return find.start_date
+    return None
+
 def get_last_updated(db: Session, user_id: uuid):
     find = db.query(ApplicationSync).filter(ApplicationSync.user_id == user_id).first()
     if find:
-        print("found")
         return find
     return None
     
