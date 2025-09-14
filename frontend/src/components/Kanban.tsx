@@ -2,6 +2,7 @@ import React from "react";
 import { API_BASE_URL } from "../api/api";
 import KanbanCard from "./KanbanCard";
 import { useState, useEffect } from "react";
+import DateInput from "./DateInput";
 
 const columns = [
   { id: "sent", title: "Application Sent" },
@@ -13,6 +14,7 @@ interface Applications {
   id: string,
   company?: string,
   date: string
+  // retrieve status 
   status: "sent"| "process" | "rejected";
 }
 
@@ -21,15 +23,49 @@ interface APIResponse {
   applications: Applications[];
 }
 
-const KanbanBoard: React.FC = () => {
+type ChildProp = {
+  date: string
+}
+
+const KanbanBoard: React.FC<ChildProp> = ({date}) => {
     const [apps, setApps] = useState<Applications[]>([]);
+    const [listApps, setListApps] = useState<Applications[]>([]);
       useEffect(() => {
-        console.log("sending req")
-        getMessages();
+        console.log("fetching jobs")
+        listAllJobs();
       }, []);
+
+    const dateset = async () => {
+      console.log("date", date)
+      const respone = await fetch(`${API_BASE_URL}/sync/sync_time`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ day: date }),
+      });
+
+      const data = await respone.json();
+      console.log("data", data)
+    }
+
+
+    const listAllJobs = async () => {
+      const response = await fetch(`${API_BASE_URL}/job/list`, {
+        method: "GET",
+        credentials: "include"
+      });
+
+      const data: APIResponse = await response.json();
+      console.log(listAllJobs);
+      setApps(data?.applications ?? []);
+
+
+    }
     
-   const getMessages = async () => {
+    // use date input to filter refresh
+   const refresh = async () => {
     try {
+
       const response = await fetch(`${API_BASE_URL}/gmail-service/fetch-applications`, {
         method: "GET",
         credentials: "include",
@@ -45,7 +81,7 @@ const KanbanBoard: React.FC = () => {
 
       const data: APIResponse = await response.json();
       console.log("data:", data);
-
+      // add these to curr state
       setApps(data?.applications ?? []);
     } catch (error) {
       console.error("Error fetching applications:", error);
@@ -53,8 +89,11 @@ const KanbanBoard: React.FC = () => {
     }
   };
 return (
- 
+  <>
+    <button onClick={refresh}> refresh </button>
+    <button onClick={dateset}> date</button>
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      
       {columns.map((col) => (
         <div
           key={col.id}
@@ -79,7 +118,9 @@ return (
         </div>
       ))}
     </div>
+      </>
   );
+  
 };
 
 export default KanbanBoard;
