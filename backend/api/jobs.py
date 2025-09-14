@@ -8,12 +8,13 @@ from datetime import datetime, timezone
 from backend.service.jobs_service import *
 
 
-router = APIRouter(prefix="/jobs", tags=["Jobs"])
+router = APIRouter( tags=["Jobs"])
 
 @router.post("/create", response_model=ApplicationOut)
 def create_job(job: ApplicationCreate, db: Session = Depends(get_db), curr_user: User = Depends(get_current_user)):
     time = datetime.now(timezone.utc)
     return create_job_service(db, curr_user.id, job, time)
+    
 
 @router.patch("/update", response_model=EditApplicationOut)
 def update_user_job(job: EditApplication, db: Session = Depends(get_db), curr_user: User = Depends(get_current_user)):
@@ -23,4 +24,5 @@ def update_user_job(job: EditApplication, db: Session = Depends(get_db), curr_us
 
 @router.get("/list")
 def list_user_jobs(db: Session = Depends(get_db), curr_user: User = Depends(get_current_user)):
-    return list_jobs(db, curr_user.id)
+    jobs =  list_jobs(db, curr_user.id)
+    return {"message": "fetched!", "applications": jobs}

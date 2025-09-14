@@ -43,6 +43,16 @@ def update_job_application(db: Session, app_id: uuid.UUID, data: EditApplication
 
 def list_jobs(db: Session, id: uuid):
     jobs = db.query(Application).filter(Application.user_id == id).all()
-    return jobs
+    fetched_applications = []
+
+    for job in jobs:
+        fetched_applications.append({
+            "id": job.id,
+            "company": job.company_name,
+            "date": job.application_date,
+            "status": job.status
+        })
+
+    return fetched_applications
 
  
