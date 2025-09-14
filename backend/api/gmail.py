@@ -64,7 +64,8 @@ def fetch_job_applications(current_user: User = Depends(get_current_user), db: S
 
     for msg in messages:
         full_msg = service.users().messages().get(userId="me", id=msg["id"]).execute()
-        
+        internal_date_ms_str = full_msg['internalDate']
+
         payload = full_msg['payload']
         headers = payload['headers']
         for header in headers:
@@ -78,18 +79,21 @@ def fetch_job_applications(current_user: User = Depends(get_current_user), db: S
 
         if company is None:
             company = extract_company(email_subject)
+        timestamp_sec = int(internal_date_ms_str) / 1000
+        receipt_time = datetime.fromtimestamp(timestamp_sec, tz=timezone.utc)
 
         fetched_applications.append({
             "id": full_msg["id"],
             "company": company,
-            "date": email_date,
+            "date": receipt_time,
             "status": "sent"
         })
+
         # obviously change inputs later
         job = ApplicationCreate(company=company, 
                                 position="swe intern", 
                                 status="sent", 
-                                time=datetime.now(timezone.utc))
+                                time=receipt_time)
         create_job_service(db, current_user.id, job)
 
     
