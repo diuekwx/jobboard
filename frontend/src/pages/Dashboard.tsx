@@ -1,7 +1,10 @@
 import KanbanBoard from "../components/Kanban";
 import { API_BASE_URL } from "../api/api";
+import DateInput from "../components/DateInput";
+import { useState } from "react";
 
 const Dashboard = () => {
+  const [startDate, seteStartDate] = useState("");
 
   const ping = async () => {
     const response = await fetch(`${API_BASE_URL}/api/user/ping`, {
@@ -27,7 +30,12 @@ const Dashboard = () => {
   return (
 
     <div className="min-h-screen bg-gray-900 text-white p-6">
-
+    <DateInput
+      onDateChange={(date) => {
+        console.log("User picked date:", date);
+        seteStartDate(date);
+      }}
+    />
     <button onClick={ping}>
       PING
     </button>
@@ -35,7 +43,7 @@ const Dashboard = () => {
     ME
     </button>
       <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-      <KanbanBoard />
+      <KanbanBoard date={startDate}/>
     </div>
   );
 };
