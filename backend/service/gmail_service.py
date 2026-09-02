@@ -24,6 +24,29 @@ _SUBJECT_TERMS = " OR ".join([
     '"we received your application"', '"received your application"',
     '"application has been received"', '"application confirmation"',
     '"your application"', '"successfully submitted"', '"we got your application"',
+    # rejection-shaped subjects
+    '"application update"', '"update on your application"',
+    '"regarding your application"', '"application status"',
+    '"status of your application"', '"your recent application"',
+    '"your candidacy"', '"your job application"',
+])
+
+# Phrases distinctive enough to search unqualified, i.e. against the message
+# body as well. Rejection subjects are often bland ("Acme") while the decline
+# itself is unmistakable in the body, so subject-only matching misses them.
+_BODY_TERMS = " OR ".join([
+    '"we regret to inform"',
+    '"moving forward with other candidates"',
+    '"move forward with other candidates"',
+    '"pursue other candidates"',
+    '"other candidates whose"',
+    '"not moving forward with your application"',
+    '"will not be moving forward"',
+    '"decided not to move forward"',
+    '"no longer under consideration"',
+    '"your application was not successful"',
+    '"not been selected"',
+    '"position has been filled"',
 ])
 
 
@@ -32,8 +55,12 @@ def build_query(after_epoch: int) -> str:
 
     Deliberately broad — the classifier does the real filtering. Searches all
     mail (not just the inbox) so filtered/labelled recruiting mail is still seen.
+    Covers both application confirmations and rejections.
     """
-    return f"(subject:({_SUBJECT_TERMS}) OR from:({_ATS_FROM})) after:{after_epoch} -in:chats"
+    return (
+        f"(subject:({_SUBJECT_TERMS}) OR from:({_ATS_FROM}) OR ({_BODY_TERMS})) "
+        f"after:{after_epoch} -in:chats"
+    )
 
 
 # --- header lookup ----------------------------------------------------------

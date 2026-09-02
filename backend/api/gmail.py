@@ -12,12 +12,19 @@ from backend.core.dependencies import get_db, get_current_user
 from backend.models.db_integrationtokens import IntegrationToken
 from backend.models.db_processedmessage import ProcessedMessage
 from backend.models.db_users import User
-from backend.service.classification_service import EmailInput, classify_emails
+from backend.service.classification_service import (
+    KIND_CONFIRMATION,
+    KIND_REJECTION,
+    EmailInput,
+    classify_emails,
+)
 from backend.service.gmail_service import build_query, extract_body_text, get_header
 from backend.service.jobs_service import (
     create_email_application,
+    find_application_for_rejection,
     get_application_by_thread,
     list_jobs,
+    mark_application_rejected,
 )
 from backend.service.oauth_service import refresh_google_token
 from backend.service.sync_service import get_or_create_sync, mark_synced, search_after_datetime
@@ -32,6 +39,12 @@ LLM_BUDGET_PER_SYNC = int(os.getenv("GMAIL_LLM_BUDGET_PER_SYNC", "40"))
 # Messages processed + committed per checkpoint (keep it a multiple of the
 # classifier batch size so each chunk maps to one LLM request).
 _CHUNK = int(os.getenv("GMAIL_SYNC_CHUNK", "10"))
+# A rejection for a company with no tracked application usually means the
+# application predates the scan window. Recording it (flagged for review) is
+# more useful than dropping it; set to 0 to only ever update existing rows.
+CREATE_FROM_REJECTION = os.getenv("GMAIL_CREATE_APP_FROM_REJECTION", "1") not in (
+    "", "0", "false", "False",
+)
 
 
 def _build_gmail(token: IntegrationToken):
@@ -91,8 +104,8 @@ def fetch_job_applications(
     service = _build_gmail(token)
     candidate_ids = _list_candidate_ids(service, build_query(after_epoch))
 
-    summary = {"created": [], "needs_review": 0, "skipped": 0,
-               "not_application": 0, "deferred": 0}
+    summary = {"created": [], "rejected": [], "needs_review": 0, "skipped": 0,
+               "not_application": 0, "unmatched_rejections": 0, "deferred": 0}
 
     if not candidate_ids:
         mark_synced(db, current_user.id)
@@ -142,7 +155,7 @@ def fetch_job_applications(
             llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
         )
 
-        for mid, from_header, subject, thread_id, _body, received in chunk:
+        for mid, from_header, subject, thread_id, body, received in chunk:
             decision = decisions[mid]
 
             # over this run's LLM budget - persist nothing, reclassify next sync
@@ -158,11 +171,70 @@ def fetch_job_applications(
                 gmail_thread_id=thread_id,
             )
 
-            if not decision.is_application:
+            if decision.kind not in (KIND_CONFIRMATION, KIND_REJECTION):
                 ledger.outcome = "not_application"
                 ledger.detail = f"{decision.method}: {subject[:180]}"
                 db.add(ledger)
                 summary["not_application"] += 1
+                continue
+
+            if decision.kind == KIND_REJECTION:
+                target = find_application_for_rejection(
+                    db, current_user.id,
+                    thread_id=thread_id,
+                    company=decision.company,
+                    role=decision.role,
+                )
+                invented = target is None
+
+                if invented:
+                    if not (CREATE_FROM_REJECTION and decision.company):
+                        ledger.outcome = "rejection_unmatched"
+                        ledger.detail = f"{decision.method}: {subject[:180]}"
+                        db.add(ledger)
+                        summary["unmatched_rejections"] += 1
+                        continue
+                    # Nothing tracked for this company - the decline is the only
+                    # trace of the application, so stand a row up for it. It is
+                    # created open and closed below, on the one code path.
+                    target = create_email_application(
+                        db,
+                        current_user.id,
+                        company=decision.company,
+                        role=decision.role,
+                        status="sent",
+                        application_date=received,
+                        gmail_message_id=mid,
+                        gmail_thread_id=thread_id,
+                        needs_review=True,
+                    )
+                    summary["unmatched_rejections"] += 1
+                    summary["needs_review"] += 1
+
+                changed = mark_application_rejected(
+                    db, target,
+                    sender=from_header,
+                    subject=subject,
+                    body=body,
+                    received_at=received,
+                )
+                ledger.application_id = target.id
+                ledger.outcome = "rejected" if changed else "rejection_duplicate"
+                ledger.detail = decision.method
+                db.add(ledger)
+
+                if changed:
+                    summary["rejected"].append({
+                        "id": str(target.id),
+                        "company": target.company_name,
+                        "role": target.position,
+                        "date": received.isoformat(),
+                        "was_tracked": not invented,
+                        "method": decision.method,
+                    })
+                else:
+                    # already rejected - the response is filed, nothing moved
+                    summary["skipped"] += 1
                 continue
 
             existing = get_application_by_thread(db, current_user.id, thread_id)
@@ -209,11 +281,15 @@ def fetch_job_applications(
         sync_row.last_synced_at = datetime.now(timezone.utc)
         db.commit()
 
-    tail = f", {summary['deferred']} deferred (Refresh again)" if summary["deferred"] else ""
+    parts = [f"added {len(summary['created'])}"]
+    if summary["rejected"]:
+        parts.append(f"{len(summary['rejected'])} rejected")
+    if summary["deferred"]:
+        parts.append(f"{summary['deferred']} deferred (Refresh again)")
     return {
         "message": (
             f"Scanned {len(candidate_ids)} email(s), {len(to_process)} new — "
-            f"added {len(summary['created'])}{tail}."
+            + ", ".join(parts) + "."
         ),
         "applications": list_jobs(db, current_user.id),
         **summary,

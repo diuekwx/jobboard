@@ -2,22 +2,17 @@ import KanbanBoard from "../components/Kanban";
 import { API_BASE_URL } from "../api/api";
 import DateInput from "../components/DateInput";
 import { useState, useEffect } from "react";
-
-interface Applications {
-  id: string;
-  company?: string;
-  date: string;
-  status: "sent" | "process" | "rejected";
-}
+import type { Application } from "../types";
 
 interface APIResponse {
   message: string;
-  applications: Applications[];
+  applications: Application[];
 }
 
 const Dashboard = () => {
   const [startDate, setStartDate] = useState("");
-  const [apps, setApps] = useState<Applications[]>([]);
+  const [apps, setApps] = useState<Application[]>([]);
+  const [syncMessage, setSyncMessage] = useState("");
 
   useEffect(() => {
     listAllJobs();
@@ -39,6 +34,7 @@ const Dashboard = () => {
   };
   // pass date next to check
   const refresh = async () => {
+    setSyncMessage("Scanning your inbox...");
     try {
       const response = await fetch(`${API_BASE_URL}/gmail-service/fetch-applications`, {
         method: "GET",
@@ -48,14 +44,16 @@ const Dashboard = () => {
 
       if (!response.ok) {
         console.error("Something went wrong");
+        setSyncMessage("Sync failed. Please try again.");
         return;
       }
 
       const data: APIResponse = await response.json();
       setApps(data?.applications ?? []);
+      setSyncMessage(data?.message ?? "");
     } catch (error) {
       console.error("Error fetching applications:", error);
-      setApps([]);
+      setSyncMessage("Sync failed. Please try again.");
     }
   };
 
@@ -100,6 +98,10 @@ const Dashboard = () => {
           {startDate ? `Selected: ${startDate}` : "No date selected"}
         </span>
       </div>
+
+      {syncMessage && (
+        <p className="mb-6 text-sm text-gray-400">{syncMessage}</p>
+      )}
 
       {/* Pass apps to Kanban */}
       <KanbanBoard apps={apps} />

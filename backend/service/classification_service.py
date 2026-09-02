@@ -1,14 +1,18 @@
-"""Decide whether an e-mail is a job-application confirmation, and for whom.
+"""Decide what a job-related e-mail *is* - a confirmation, a rejection, or
+neither - and for whom.
 
 Two layers:
 
 1. ``run_rules`` - deterministic. Sender domain is the primary company signal;
    ATS vendor domains (Greenhouse, Lever, Workday, ...) are explicitly *not*
    treated as the employer. Cheap, no network, no cost.
-2. ``classify_with_llm`` - a single ``gemini-2.5-flash`` call with a structured
-   (Pydantic) JSON response, used only when the rules are not high-confidence.
+2. ``classify_with_llm`` - a single structured-JSON call, used only when the
+   rules are not high-confidence.
 
-``classify_email`` orchestrates the two and returns a :class:`Decision`.
+``classify_email`` orchestrates the two and returns a :class:`Decision` whose
+``kind`` is one of :data:`KIND_CONFIRMATION`, :data:`KIND_REJECTION` or
+:data:`KIND_OTHER`. Rejections outrank confirmations: a rejection that opens
+with "Thank you for your interest in Acme" is still a rejection.
 """
 
 import logging
@@ -19,6 +23,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# What an e-mail turned out to be.
+KIND_CONFIRMATION = "confirmation"  # "we received your application"
+KIND_REJECTION = "rejection"        # "we're moving forward with other candidates"
+KIND_OTHER = "other"                # anything else: alerts, scheduling, offers, noise
+
+KINDS = (KIND_CONFIRMATION, KIND_REJECTION, KIND_OTHER)
 
 # ---------------------------------------------------------------------------
 # Rule layer
@@ -67,6 +78,51 @@ _CONFIRMATION_PATTERNS = [
     r"has been (?:received|submitted) successfully",
 ]
 
+# Rejection wording, split by how much a single hit is worth.
+#
+# A "strong" phrase is one that essentially only appears in a decline. A "weak"
+# phrase is rejection-flavoured but also shows up in interview invites and
+# newsletters ("we wish you the best"), so two of them are needed before the
+# rules will call it on their own - otherwise the LLM gets the final say.
+_REJECTION_STRONG_PATTERNS = [
+    r"we regret to inform",
+    r"regret to (?:inform|advise|let you know)",
+    r"(?:decided|chosen|elected|opted) (?:to )?(?:move|go|proceed|continue) (?:forward|ahead|on) with (?:other|another)",
+    r"(?:moving|move|proceeding|going) (?:forward|ahead) with other (?:candidates|applicants)",
+    r"(?:will |we )?(?:are |will )?not (?:be )?(?:moving|move|proceeding|progressing|continuing) (?:forward|ahead|you)",
+    r"not (?:be )?(?:moving|proceeding) (?:forward|ahead) with your (?:application|candidacy)",
+    r"(?:decided|chosen|elected) not to (?:move|proceed|continue|advance)",
+    r"(?:pursue|pursuing|move forward with) other (?:candidates|applicants|applications)",
+    r"other candidates whose (?:qualifications|experience|background|skills)",
+    r"(?:your )?application (?:was|has been|is) (?:unfortunately )?(?:not successful|unsuccessful)",
+    r"(?:were|was) not selected (?:for|to)",
+    r"not (?:been )?selected (?:for|to move|to advance|to continue)",
+    r"no longer (?:be )?(?:under|in) consideration",
+    r"not (?:be )?(?:moving|considered) (?:you )?(?:further|forward) (?:for|at)",
+    r"we (?:are|will be|have decided to be) unable to (?:offer|move|proceed|progress)",
+    r"(?:we (?:have|'ve) )?(?:filled|closed) (?:this|the) (?:position|role|req|requisition)",
+    r"(?:this|the) (?:position|role|req|requisition) (?:has been|is now) (?:filled|closed)",
+    r"(?:has been|is) no longer (?:open|available)",
+    r"decided to move forward with (?:a|other) candidate",
+    r"not (?:a|the) (?:right|best) (?:fit|match) (?:for|at) (?:this|the) (?:time|role|position)",
+    r"will not be (?:extending|advancing|inviting)",
+]
+
+_REJECTION_WEAK_PATTERNS = [
+    r"unfortunately",
+    r"we (?:wish|want to wish) you (?:the )?(?:best|success|good luck|well)",
+    r"(?:best|good) (?:of )?luck (?:in|with|on) your (?:job |career )?(?:search|hunt|endeavors|endeavours)",
+    r"keep your (?:resume|résumé|cv|application|profile|details|information) on file",
+    r"encourage you to (?:apply|re-?apply|continue to apply)",
+    r"(?:many|a large number of|numerous|highly) (?:qualified )?(?:applicants|candidates|applications)",
+    r"(?:this|the) (?:decision|process) was (?:not )?(?:an? )?(?:easy|difficult)",
+    r"(?:we|i) appreciate the time you (?:took|invested|spent)",
+    r"(?:will|we)(?:'ll| will)? (?:not )?(?:be )?keep(?:ing)? (?:you )?in mind for future",
+    r"future (?:openings|opportunities|roles|positions)",
+    r"decision (?:regarding|on|about) your application",
+    r"update (?:on|regarding) your application",
+]
+
 _GENERIC_NAME = re.compile(
     r"\b(?:no[-\s]?reply|noreply|donotreply|do[-\s]?not[-\s]?reply|recruit(?:ing|ment)?|"
     r"talent(?:\s+acquisition)?|careers?|jobs|hr|human\s+resources|hiring(?:\s+team)?|"
@@ -99,10 +155,18 @@ _COMPANY_AT_END = re.compile(r"\bat\s+(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-
 
 @dataclass
 class RuleResult:
-    is_application: bool
+    kind: str  # KIND_CONFIRMATION | KIND_REJECTION | KIND_OTHER
     company: Optional[str]
     role: Optional[str]
     confidence: str  # "high" | "low"
+
+    @property
+    def is_application(self) -> bool:
+        return self.kind == KIND_CONFIRMATION
+
+    @property
+    def is_rejection(self) -> bool:
+        return self.kind == KIND_REJECTION
 
 
 def parse_from(value: str):
@@ -228,24 +292,50 @@ def _guess_company(name: str, domain: str, subject: str, body: str):
     return None, "low"
 
 
+def _haystack(subject: str, body: str) -> str:
+    return f"{subject or ''}\n{(body or '')[:2500]}".lower()
+
+
 def looks_like_confirmation(subject: str, body: str) -> bool:
-    hay = f"{subject or ''}\n{(body or '')[:1500]}".lower()
+    hay = _haystack(subject, body)
     return any(re.search(p, hay) for p in _CONFIRMATION_PATTERNS)
+
+
+def looks_like_rejection(subject: str, body: str) -> tuple[bool, str]:
+    """``(is_rejection, strength)`` where strength is ``"strong"`` | ``"weak"`` | ``"none"``.
+
+    One unmistakable phrase, or two softer ones, is enough. A single soft hit
+    ("unfortunately") is reported as no rejection - the LLM can still say
+    otherwise.
+    """
+    hay = _haystack(subject, body)
+    if any(re.search(p, hay) for p in _REJECTION_STRONG_PATTERNS):
+        return True, "strong"
+    weak = sum(1 for p in _REJECTION_WEAK_PATTERNS if re.search(p, hay))
+    if weak >= 2:
+        return True, "weak"
+    return False, "none"
 
 
 def run_rules(from_header: str, subject: str, body: str) -> RuleResult:
     name, _email, domain = parse_from(from_header)
+    is_rej, strength = looks_like_rejection(subject, body)
     is_conf = looks_like_confirmation(subject, body)
     from_ats = is_ats_domain(domain)
     company, conf = _guess_company(name, domain, subject, body)
     role = _guess_role(subject, body)
 
-    is_app = is_conf or (from_ats and bool(company))
-    if not is_app:
-        return RuleResult(False, company, role, "low")
+    # Rejections routinely open with confirmation wording ("Thank you for your
+    # interest in Acme...") so they are checked first and win the tie.
+    if is_rej:
+        confidence = "high" if (strength == "strong" and company and conf == "high") else "low"
+        return RuleResult(KIND_REJECTION, company, role, confidence)
+
+    if not (is_conf or (from_ats and company)):
+        return RuleResult(KIND_OTHER, company, role, "low")
 
     confidence = "high" if (is_conf and company and conf == "high") else "low"
-    return RuleResult(True, company, role, confidence)
+    return RuleResult(KIND_CONFIRMATION, company, role, confidence)
 
 
 # ---------------------------------------------------------------------------
@@ -289,23 +379,29 @@ _llm_disabled = False
 _LLM_SYSTEM = (
     "You classify emails for a job-application tracker. You are given one email's "
     "From header, Subject, and a plain-text excerpt.\n\n"
-    "Decide whether it is a confirmation that THE RECIPIENT submitted a job "
-    "application - an automated acknowledgement from an employer or its applicant "
-    "tracking system. These are NOT confirmations: job alerts and newsletters, "
-    "recruiter cold outreach, interview scheduling, assessment invites, rejections, "
-    "and offers.\n\n"
+    "Set `category` to exactly one of:\n"
+    "- \"confirmation\": an automated acknowledgement from an employer or its "
+    "applicant tracking system that THE RECIPIENT submitted an application.\n"
+    "- \"rejection\": the employer is declining the recipient - moving forward "
+    "with other candidates, the role was filled, the recipient was not selected, "
+    "or the application is no longer under consideration.\n"
+    "- \"other\": anything else, including job alerts and newsletters, recruiter "
+    "cold outreach, interview scheduling, assessment invites, and offers.\n\n"
+    "A rejection usually opens with polite confirmation wording (\"Thank you for "
+    "your interest in Acme\") - if the email declines the candidate anywhere in "
+    "the text the category is \"rejection\", never \"confirmation\".\n\n"
     "Report `company` as the employer the person applied to - NEVER the ATS vendor "
     "(Greenhouse, Lever, Workday, Ashby, iCIMS, SmartRecruiters, Workable, and the "
     "like). Use an empty string for `company` or `role` when you cannot tell. Keep "
     "`role` short, e.g. \"Software Engineer Intern\". Set `confidence` to how sure "
-    "you are that this is an application confirmation.\n\n"
+    "you are of the category.\n\n"
     "Reply with a single JSON object and nothing else - no prose, no code fences."
 )
 
 
 class EmailClassification(BaseModel):  # type: ignore[misc]
-    is_application_confirmation: bool = Field(
-        description="True only if this email confirms the recipient submitted a job application."
+    category: str = Field(
+        description='One of "confirmation", "rejection", "other".'
     )
     company: str = Field(
         description="Employer the recipient applied to (never the ATS vendor). Empty string if unknown."
@@ -314,7 +410,7 @@ class EmailClassification(BaseModel):  # type: ignore[misc]
         description='Short job title, e.g. "Software Engineer Intern". Empty string if unknown.'
     )
     confidence: str = Field(
-        description='One of "high", "medium", "low" - how sure this is an application confirmation.'
+        description='One of "high", "medium", "low" - how sure you are of the category.'
     )
 
 
@@ -407,10 +503,28 @@ def _call_llm(user_content: str, max_tokens: int):
             return None
 
 
+def _coerce_category(d: dict) -> str:
+    """Normalise whatever the model said into one of :data:`KINDS`.
+
+    Also understands the older boolean shape (``is_application_confirmation``)
+    so a model that was prompt-cached on the previous schema still parses.
+    """
+    raw = str(d.get("category") or d.get("kind") or d.get("label") or "").strip().lower()
+    if raw.startswith("reject") or raw in ("declined", "decline", "no"):
+        return KIND_REJECTION
+    if raw.startswith("confirm") or raw in ("application", "applied", "acknowledgement"):
+        return KIND_CONFIRMATION
+    if raw:
+        return KIND_OTHER
+    if "is_application_confirmation" in d:
+        return KIND_CONFIRMATION if bool(d["is_application_confirmation"]) else KIND_OTHER
+    return KIND_OTHER
+
+
 def _to_classification(d: dict) -> Optional[EmailClassification]:
     try:
         return EmailClassification(
-            is_application_confirmation=bool(d.get("is_application_confirmation", False)),
+            category=_coerce_category(d),
             company=str(d.get("company") or ""),
             role=str(d.get("role") or ""),
             confidence=str(d.get("confidence") or "low"),
@@ -424,7 +538,7 @@ def classify_with_llm(from_header: str, subject: str, body: str) -> Optional[Ema
     uses the batched path below)."""
     content = (
         f"From: {from_header}\nSubject: {subject}\n\n{(body or '')[:2500]}\n\n"
-        'Respond with JSON: {"is_application_confirmation": true|false, '
+        'Respond with JSON: {"category": "confirmation"|"rejection"|"other", '
         '"company": "...", "role": "...", "confidence": "high"|"medium"|"low"}. '
         'Use "" for company or role if unknown.'
     )
@@ -443,11 +557,19 @@ def classify_with_llm(from_header: str, subject: str, body: str) -> Optional[Ema
 
 @dataclass
 class Decision:
-    is_application: bool
+    kind: str  # KIND_CONFIRMATION | KIND_REJECTION | KIND_OTHER
     company: Optional[str]
     role: Optional[str]
     needs_review: bool
-    method: str  # "rules" | "llm" | "rules+llm"
+    method: str  # "rules" | "llm" | "rules+llm" | "deferred"
+
+    @property
+    def is_application(self) -> bool:
+        return self.kind == KIND_CONFIRMATION
+
+    @property
+    def is_rejection(self) -> bool:
+        return self.kind == KIND_REJECTION
 
 
 @dataclass
@@ -458,26 +580,35 @@ class EmailInput:
     body: str
 
 
+def _nothing(method: str) -> Decision:
+    return Decision(KIND_OTHER, None, None, False, method)
+
+
 def _merge(rule: RuleResult, llm: Optional[EmailClassification]) -> Decision:
     if llm is None:
         # LLM unavailable/skipped/errored - trust rules, flag for a human look.
-        if rule.is_application:
-            return Decision(True, rule.company, rule.role, True, "rules")
-        return Decision(False, None, None, False, "rules")
+        if rule.kind == KIND_OTHER:
+            return _nothing("rules")
+        return Decision(rule.kind, rule.company, rule.role, True, "rules")
 
-    method = "rules+llm" if rule.is_application else "llm"
-    if llm.is_application_confirmation:
-        company = (llm.company or "").strip() or rule.company
-        role = (llm.role or "").strip() or rule.role
-        needs_review = (not company) or (llm.confidence or "").lower() == "low"
-        return Decision(True, company, role, needs_review, method)
-    return Decision(False, None, None, False, method)
+    method = "rules+llm" if rule.kind != KIND_OTHER else "llm"
+    if llm.category == KIND_OTHER:
+        # The rules only shout "rejection" on unambiguous wording, so keep that
+        # verdict when the model shrugs - but send it for review.
+        if rule.kind == KIND_REJECTION and rule.confidence == "high":
+            return Decision(KIND_REJECTION, rule.company, rule.role, True, method)
+        return _nothing(method)
+
+    company = (llm.company or "").strip() or rule.company
+    role = (llm.role or "").strip() or rule.role
+    needs_review = (not company) or (llm.confidence or "").lower() == "low"
+    return Decision(llm.category, company, role, needs_review, method)
 
 
 def classify_email(from_header: str, subject: str, body: str, *, use_llm: bool = True) -> Decision:
     rule = run_rules(from_header, subject, body)
-    if rule.is_application and rule.company and rule.confidence == "high":
-        return Decision(True, rule.company, rule.role, False, "rules")
+    if rule.kind != KIND_OTHER and rule.company and rule.confidence == "high":
+        return Decision(rule.kind, rule.company, rule.role, False, "rules")
     llm = classify_with_llm(from_header, subject, body) if use_llm else None
     return _merge(rule, llm)
 
@@ -495,7 +626,7 @@ def _classify_chunk_llm(chunk: list[EmailInput]) -> dict[str, EmailClassificatio
     content = (
         "Classify each email below.\n\n" + "\n\n".join(parts) + "\n\n"
         'Respond with JSON: {"results": [{"index": <int>, '
-        '"is_application_confirmation": true|false, "company": "...", "role": "...", '
+        '"category": "confirmation"|"rejection"|"other", "company": "...", "role": "...", '
         '"confidence": "high"|"medium"|"low"}, ...]} - exactly one object per email, '
         "where index is the number after 'EMAIL'. Use \"\" for company or role if unknown."
     )
@@ -543,8 +674,8 @@ def classify_emails(
     for it in items:
         r = run_rules(it.from_header, it.subject, it.body)
         rules[it.key] = r
-        if r.is_application and r.company and r.confidence == "high":
-            results[it.key] = Decision(True, r.company, r.role, False, "rules")
+        if r.kind != KIND_OTHER and r.company and r.confidence == "high":
+            results[it.key] = Decision(r.kind, r.company, r.role, False, "rules")
         else:
             pending.append(it)
 
