@@ -8,12 +8,13 @@ export interface Application {
   status: string;
   source?: string;
   needs_review?: boolean;
+  permalink?: string | null;
   /** When the decline landed. Only set once an application is rejected. */
   rejected_at?: string | null;
 }
 
-/** Anything the backend has no column for lands in "Application Sent". */
-const COLUMN_BY_STATUS: Record<string, ApplicationStatus> = {
+/** Anything the backend has no pane for lands in "Sent". */
+const PANE_BY_STATUS: Record<string, ApplicationStatus> = {
   sent: "sent",
   applied: "sent",
   process: "process",
@@ -22,5 +23,9 @@ const COLUMN_BY_STATUS: Record<string, ApplicationStatus> = {
   rejected: "rejected",
 };
 
-export const columnFor = (status: string): ApplicationStatus =>
-  COLUMN_BY_STATUS[(status ?? "").toLowerCase()] ?? "sent";
+export const paneFor = (status: string): ApplicationStatus =>
+  PANE_BY_STATUS[(status ?? "").toLowerCase()] ?? "sent";
+
+/** Timestamps arrive as ISO dates or datetimes; the log shows the day only. */
+export const dayOf = (value?: string | null): string =>
+  (value ?? "").slice(0, 10);

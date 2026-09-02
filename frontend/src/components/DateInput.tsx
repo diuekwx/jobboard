@@ -36,16 +36,13 @@ const DateInput: React.FC<DateInputProps> = ({ onDateChange }) => {
   };
 
   return (
-    <div className="flex flex-col space-y-1">
-        <input
-        type="date"
-        value={date}
-        onChange={handleChange}
-        className="bg-gray-700 text-gray-100 px-4 py-2 rounded-lg border border-gray-600
-                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                  transition w-48"
-      />
-    </div>
+    <input
+      type="date"
+      value={date}
+      onChange={handleChange}
+      className="field"
+      aria-label="Sync start date"
+    />
   );
 };
 

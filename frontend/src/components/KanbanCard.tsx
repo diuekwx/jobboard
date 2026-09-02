@@ -1,60 +1,71 @@
-import type { ApplicationStatus } from "../types";
+import { dayOf, type ApplicationStatus } from "../types";
 
 interface KanbanCardProps {
+  id: string;
   company?: string;
   role?: string | null;
   date: string;
   status: ApplicationStatus;
-  rejectedAt?: string | null;
+  index: number;
+  permalink?: string | null;
   needsReview?: boolean;
+  rejectedAt?: string | null;
 }
 
-const formatDate = (value?: string | null) => {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
-};
-
 const KanbanCard = ({
+  id,
   company,
   role,
   date,
   status,
-  rejectedAt,
+  index,
+  permalink,
   needsReview,
+  rejectedAt,
 }: KanbanCardProps) => {
-  const rejected = status === "rejected";
-  const applied = formatDate(date);
-  const closed = formatDate(rejectedAt);
+  const name = company || "—";
+  const closed = status === "rejected" ? dayOf(rejectedAt) : "";
 
   return (
     <div
-      className={`rounded-xl p-4 shadow-md transition-shadow duration-200 hover:shadow-lg ${
-        rejected ? "bg-gray-800 border border-gray-600" : "bg-gray-700"
-      }`}
+      className={`entry entry--${status}${needsReview ? " entry--review" : ""}`}
+      style={{ animationDelay: `${Math.min(index, 14) * 26}ms` }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <h3
-          className={`text-lg font-semibold ${
-            rejected ? "text-gray-400 line-through decoration-gray-500" : ""
-          }`}
-        >
-          {company ?? "Unknown company"}
-        </h3>
+      <span className="entry__idx">{String(index + 1).padStart(3, "0")}</span>
+
+      <span className="entry__co">
+        {permalink ? (
+          <a
+            href={permalink}
+            target="_blank"
+            rel="noreferrer"
+            className="entry__colink"
+            title={
+              needsReview
+                ? "Auto-guessed from the email — open it in Gmail to verify"
+                : "Open the source email in Gmail"
+            }
+          >
+            {name} ↗
+          </a>
+        ) : (
+          name
+        )}
         {needsReview && (
           <span
-            title="Guessed from an email — worth a second look"
-            className="shrink-0 rounded border border-gray-500 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-400"
+            className="entry__flag"
+            title="Company/role was auto-guessed from the email — please verify"
           >
-            Review
+            {" "}
+            ?
           </span>
         )}
-      </div>
+      </span>
 
-      {role && <p className="mt-1 text-sm text-gray-300">{role}</p>}
-
-      <p className="mt-2 text-sm text-gray-400">Applied: {applied ?? "—"}</p>
-      {rejected && <p className="text-sm text-gray-500">Rejected: {closed ?? "—"}</p>}
+      <span className="entry__meta" title={id}>
+        {role ? `${role} · ` : ""}applied {dayOf(date)}
+        {closed ? ` · closed ${closed}` : ""}
+      </span>
     </div>
   );
 };
