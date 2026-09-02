@@ -42,14 +42,14 @@ _BODY_TERMS = " OR ".join([
     '"other candidates whose"',
     '"not moving forward with your application"',
     '"will not be moving forward"',
-    '"decided not to move forward"',
     '"no longer under consideration"',
     '"your application was not successful"',
     '"not been selected"',
     '"position has been filled"',
-    '"decided not to progress"',
-    '"not to progress with your application"',
+    '"not to progress"',
     '"unable to progress your application"',
+    '"not to move forward"',
+    '"no longer available at this time"',
 ])
 
 
