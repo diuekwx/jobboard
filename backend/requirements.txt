@@ -20,4 +20,4 @@ loguru
 tenacity
 pytest
 
-google-genai
+openai

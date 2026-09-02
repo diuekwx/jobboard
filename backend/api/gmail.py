@@ -12,7 +12,7 @@ from backend.core.dependencies import get_db, get_current_user
 from backend.models.db_integrationtokens import IntegrationToken
 from backend.models.db_processedmessage import ProcessedMessage
 from backend.models.db_users import User
-from backend.service.classification_service import classify_email
+from backend.service.classification_service import EmailInput, classify_emails
 from backend.service.gmail_service import build_query, extract_body_text, get_header
 from backend.service.jobs_service import (
     create_email_application,
@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["gmail"])
 
 MAX_MESSAGES_PER_SYNC = int(os.getenv("GMAIL_MAX_MESSAGES", "200"))
+# Cap LLM classification calls per sync so one big run can't blow the provider's
+# rate limit. Overflow is deferred (nothing persisted) and picked up next sync.
+LLM_BUDGET_PER_SYNC = int(os.getenv("GMAIL_LLM_BUDGET_PER_SYNC", "40"))
+# Messages processed + committed per checkpoint (keep it a multiple of the
+# classifier batch size so each chunk maps to one LLM request).
+_CHUNK = int(os.getenv("GMAIL_SYNC_CHUNK", "10"))
 
 
 def _build_gmail(token: IntegrationToken):
@@ -85,7 +91,8 @@ def fetch_job_applications(
     service = _build_gmail(token)
     candidate_ids = _list_candidate_ids(service, build_query(after_epoch))
 
-    summary = {"created": [], "needs_review": 0, "skipped": 0, "not_application": 0}
+    summary = {"created": [], "needs_review": 0, "skipped": 0,
+               "not_application": 0, "deferred": 0}
 
     if not candidate_ids:
         mark_synced(db, current_user.id)
@@ -99,6 +106,8 @@ def fetch_job_applications(
     }
     to_process = [mid for mid in candidate_ids if mid not in already]
 
+    # --- phase 1: fetch + extract every candidate message ---
+    records = []  # (mid, from, subject, thread_id, body, received)
     for mid in to_process:
         try:
             full = service.users().messages().get(userId="me", id=mid, format="full").execute()
@@ -108,74 +117,103 @@ def fetch_job_applications(
 
         payload = full.get("payload", {}) or {}
         headers = payload.get("headers", []) or []
-        from_header = get_header(headers, "From")
-        subject = get_header(headers, "Subject")
-        thread_id = full.get("threadId")
-        body = extract_body_text(payload)
-
         try:
             received = datetime.fromtimestamp(int(full["internalDate"]) / 1000, tz=timezone.utc)
         except (KeyError, TypeError, ValueError):
             received = datetime.now(timezone.utc)
 
-        decision = classify_email(from_header, subject, body)
+        records.append((
+            mid,
+            get_header(headers, "From"),
+            get_header(headers, "Subject"),
+            full.get("threadId"),
+            extract_body_text(payload),
+            received,
+        ))
 
-        ledger = ProcessedMessage(
-            user_id=current_user.id,
-            gmail_message_id=mid,
-            gmail_thread_id=thread_id,
+    # --- phase 2+3: classify and apply in chunks, committing progress per chunk ---
+    # so an interrupted/timed-out sync keeps what it finished and never re-sends
+    # those emails to the LLM.
+    llm_used = 0
+    for start in range(0, len(records), _CHUNK):
+        chunk = records[start:start + _CHUNK]
+        decisions = classify_emails(
+            [EmailInput(mid, frm, subj, body) for (mid, frm, subj, _t, body, _r) in chunk],
+            llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
         )
 
-        if not decision.is_application:
-            ledger.outcome = "not_application"
-            ledger.detail = f"{decision.method}: {subject[:180]}"
-            db.add(ledger)
-            summary["not_application"] += 1
-            continue
+        for mid, from_header, subject, thread_id, _body, received in chunk:
+            decision = decisions[mid]
 
-        existing = get_application_by_thread(db, current_user.id, thread_id)
-        if existing:
-            ledger.outcome = "duplicate_thread"
-            ledger.application_id = existing.id
+            # over this run's LLM budget - persist nothing, reclassify next sync
+            if decision.method == "deferred":
+                summary["deferred"] += 1
+                continue
+            if decision.method in ("llm", "rules+llm"):
+                llm_used += 1
+
+            ledger = ProcessedMessage(
+                user_id=current_user.id,
+                gmail_message_id=mid,
+                gmail_thread_id=thread_id,
+            )
+
+            if not decision.is_application:
+                ledger.outcome = "not_application"
+                ledger.detail = f"{decision.method}: {subject[:180]}"
+                db.add(ledger)
+                summary["not_application"] += 1
+                continue
+
+            existing = get_application_by_thread(db, current_user.id, thread_id)
+            if existing:
+                ledger.outcome = "duplicate_thread"
+                ledger.application_id = existing.id
+                ledger.detail = decision.method
+                db.add(ledger)
+                summary["skipped"] += 1
+                continue
+
+            app = create_email_application(
+                db,
+                current_user.id,
+                company=decision.company,
+                role=decision.role,
+                status="sent",
+                application_date=received,
+                gmail_message_id=mid,
+                gmail_thread_id=thread_id,
+                needs_review=decision.needs_review,
+            )
+            ledger.application_id = app.id
+            ledger.outcome = "needs_review" if decision.needs_review else "created"
             ledger.detail = decision.method
             db.add(ledger)
-            summary["skipped"] += 1
-            continue
 
-        app = create_email_application(
-            db,
-            current_user.id,
-            company=decision.company,
-            role=decision.role,
-            status="sent",
-            application_date=received,
-            gmail_message_id=mid,
-            gmail_thread_id=thread_id,
-            needs_review=decision.needs_review,
-        )
-        ledger.application_id = app.id
-        ledger.outcome = "needs_review" if decision.needs_review else "created"
-        ledger.detail = decision.method
-        db.add(ledger)
+            summary["created"].append({
+                "id": str(app.id),
+                "company": app.company_name,
+                "role": app.position,
+                "date": received.isoformat(),
+                "needs_review": decision.needs_review,
+                "method": decision.method,
+            })
+            if decision.needs_review:
+                summary["needs_review"] += 1
 
-        summary["created"].append({
-            "id": str(app.id),
-            "company": app.company_name,
-            "role": app.position,
-            "date": received.isoformat(),
-            "needs_review": decision.needs_review,
-            "method": decision.method,
-        })
-        if decision.needs_review:
-            summary["needs_review"] += 1
+        db.commit()  # checkpoint progress after every chunk
 
-    sync_row.last_synced_at = datetime.now(timezone.utc)
-    db.commit()
+    # Only advance the watermark once nothing is left deferred, so a deferred
+    # email older than the lookback window can't fall outside the next query.
+    if summary["deferred"] == 0:
+        sync_row.last_synced_at = datetime.now(timezone.utc)
+        db.commit()
 
+    tail = f", {summary['deferred']} deferred (Refresh again)" if summary["deferred"] else ""
     return {
         "message": (
             f"Scanned {len(candidate_ids)} email(s), {len(to_process)} new — "
-            f"added {len(summary['created'])}."
+            f"added {len(summary['created'])}{tail}."
         ),
         "applications": list_jobs(db, current_user.id),
         **summary,

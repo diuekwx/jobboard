@@ -14,6 +14,7 @@ Two layers:
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -152,14 +153,34 @@ def _company_from_domain(domain: str) -> Optional[str]:
     return label.replace("-", " ").title()
 
 
+# ATS platforms where the email subdomain really is the employer's tenant slug
+# (e.g. acme.greenhouse.io). iCIMS/Workday/etc. send from a *shared* subdomain
+# like talent.icims.com, so they are deliberately excluded here.
+_TENANT_SUBDOMAIN_ATS = {
+    "greenhouse.io", "greenhouse-mail.io", "lever.co", "hire.lever.co",
+    "jobs.lever.co", "ashbyhq.com", "smartrecruiters.com", "teamtailor.com",
+    "teamtailormail.com", "recruitee.com", "breezy.hr", "bamboohr.com",
+}
+_SUBDOMAIN_INFRA_SLUGS = {
+    "mail", "email", "e", "em", "jobs", "job", "hire", "hiring", "us", "eu",
+    "app", "apps", "noreply", "www", "careers", "career", "talent", "talents",
+    "auto", "autoreply", "reply", "replies", "notification", "notifications",
+    "notify", "messaging", "message", "bounce", "bounces", "system", "alerts",
+    "alert", "updates", "info", "donotreply", "smtp", "mailer", "send", "outbound",
+}
+
+
 def _company_from_ats_subdomain(domain: str) -> Optional[str]:
-    """``acme.greenhouse.io`` -> ``"Acme"`` (the tenant slug on an ATS host)."""
-    for ats in ATS_DOMAINS:
+    """``acme.greenhouse.io`` -> ``"Acme"`` - only for ATS hosts whose email
+    subdomain is the employer's tenant, not shared infra like ``talent.icims.com``."""
+    for ats in _TENANT_SUBDOMAIN_ATS:
         if domain.endswith("." + ats):
-            slug = domain[: -(len(ats) + 1)].split(".")[-1]
-            if slug and slug not in ("mail", "email", "jobs", "hire", "us", "eu",
-                                     "app", "no-reply", "noreply", "www", "careers"):
-                return slug.replace("-", " ").title()
+            slug = domain[: -(len(ats) + 1)].split(".")[-1].replace("-", " ")
+            if slug.replace(" ", "") in _SUBDOMAIN_INFRA_SLUGS:
+                return None
+            cleaned = _clean_name(slug)
+            if cleaned and len(cleaned) >= 2:
+                return cleaned.title() if cleaned.islower() else cleaned
     return None
 
 
@@ -185,6 +206,13 @@ def _guess_company(name: str, domain: str, subject: str, body: str):
         c = fn(domain)
         if c:
             return c, "high"
+
+    # ATS platforms append " @ icims", " | Greenhouse", etc. to the sender name.
+    name = re.sub(
+        r"\s*[@|/]\s*(?:icims|greenhouse|lever|workday|myworkday|ashby|ashbyhq|"
+        r"smartrecruiters|workable|jobvite|taleo|successfactors|teamtailor)\s*$",
+        "", name or "", flags=re.I,
+    ).strip()
 
     cleaned = _clean_name(name)
     if cleaned:
@@ -232,7 +260,28 @@ except Exception:  # pragma: no cover
     def Field(*_a, **_kw):  # type: ignore
         return None
 
-CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "gemini-2.5-flash")
+# The LLM is reached over an OpenAI-compatible API - works with a local runtime
+# (Ollama: http://localhost:11434/v1), OpenRouter, Groq, Gemini's OpenAI
+# endpoint, a self-hosted LiteLLM proxy, etc. Set LLM_BASE_URL + LLM_API_KEY +
+# CLASSIFIER_MODEL to match. Local/self-hosted endpoints and ":free" model ids
+# never spend money; anything else needs CLASSIFIER_ALLOW_PAID=1.
+LLM_BASE_URL = (
+    os.getenv("LLM_BASE_URL")
+    or os.getenv("OPENROUTER_BASE_URL")
+    or "http://localhost:11434/v1"
+)
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
+CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "qwen3:8b")
+
+_ALLOW_PAID = os.getenv("CLASSIFIER_ALLOW_PAID", "0") not in ("", "0", "false", "False")
+_IS_LOCAL = any(h in LLM_BASE_URL for h in ("localhost", "127.0.0.1", "0.0.0.0", "::1"))
+_IS_FREE = (
+    _IS_LOCAL
+    or CLASSIFIER_MODEL.endswith(":free")
+    or CLASSIFIER_MODEL == "openrouter/free"
+)
+# qwen3 and other reasoning models emit <think>…</think>; ask them not to.
+_NO_THINK = "qwen3" in CLASSIFIER_MODEL.lower()
 
 _llm_client = None
 _llm_disabled = False
@@ -249,7 +298,8 @@ _LLM_SYSTEM = (
     "(Greenhouse, Lever, Workday, Ashby, iCIMS, SmartRecruiters, Workable, and the "
     "like). Use an empty string for `company` or `role` when you cannot tell. Keep "
     "`role` short, e.g. \"Software Engineer Intern\". Set `confidence` to how sure "
-    "you are that this is an application confirmation."
+    "you are that this is an application confirmation.\n\n"
+    "Reply with a single JSON object and nothing else - no prose, no code fences."
 )
 
 
@@ -273,51 +323,118 @@ def _get_client():
     if _llm_disabled:
         return None
     if _llm_client is None:
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            logger.warning("GEMINI_API_KEY not set - LLM email classification disabled")
+        if not LLM_API_KEY and not _IS_LOCAL:
+            logger.warning("LLM_API_KEY not set - LLM email classification disabled")
+            _llm_disabled = True
+            return None
+        if not _IS_FREE and not _ALLOW_PAID:
+            logger.warning(
+                "CLASSIFIER_MODEL=%r is not local or ':free' and CLASSIFIER_ALLOW_PAID "
+                "is not set - LLM classification disabled to avoid spending money",
+                CLASSIFIER_MODEL,
+            )
             _llm_disabled = True
             return None
         try:
-            from google import genai
+            from openai import OpenAI
 
-            _llm_client = genai.Client(api_key=api_key)
+            _llm_client = OpenAI(
+                base_url=LLM_BASE_URL,
+                api_key=LLM_API_KEY or "local",
+                max_retries=0,  # we do our own backoff
+                default_headers={"X-Title": "job-application-tracker"},
+            )
         except Exception:
-            logger.exception("could not initialise Gemini client - LLM classification disabled")
+            logger.exception("could not initialise OpenRouter client - LLM classification disabled")
             _llm_disabled = True
             return None
     return _llm_client
 
 
-def classify_with_llm(from_header: str, subject: str, body: str) -> Optional[EmailClassification]:
+LLM_MAX_ATTEMPTS = int(os.getenv("CLASSIFIER_MAX_ATTEMPTS", "3"))
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    for attr in ("status_code", "code", "http_status"):
+        if getattr(exc, attr, None) in (429, 500, 502, 503, 529):
+            return True
+    blob = str(exc).lower()
+    return any(s in blob for s in ("429", "rate limit", "rate_limit", "quota",
+                                   "resource_exhausted", "overloaded", "unavailable",
+                                   "timeout", "502", "503", "529"))
+
+
+def _call_llm(user_content: str, max_tokens: int):
+    """One chat-completions request in JSON mode, with retry/backoff on
+    rate-limit / transient errors. Returns the parsed JSON object, or None."""
     client = _get_client()
     if client is None:
         return None
 
-    content = f"From: {from_header}\nSubject: {subject}\n\n{(body or '')[:2500]}"
-    try:
-        from google.genai import types
+    import json
 
-        resp = client.models.generate_content(
-            model=CLASSIFIER_MODEL,
-            contents=content,
-            config=types.GenerateContentConfig(
-                system_instruction=_LLM_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=EmailClassification,
+    system = _LLM_SYSTEM + ("\n\n/no_think" if _NO_THINK else "")
+    delay = 3.0
+    for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=CLASSIFIER_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format={"type": "json_object"},
                 temperature=0.0,
-                max_output_tokens=512,
-                # this is a mechanical extraction task - no need to burn tokens "thinking"
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
+                max_tokens=max_tokens,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+            try:
+                return json.loads(text)
+            except ValueError:
+                m = re.search(r"[\{\[].*[\}\]]", text, re.S)  # unwrap fences / prose
+                return json.loads(m.group(0)) if m else None
+        except Exception as exc:
+            if attempt < LLM_MAX_ATTEMPTS and _is_rate_limit(exc):
+                logger.warning(
+                    "LLM rate-limited (%s); retry %d/%d in %.0fs",
+                    exc.__class__.__name__, attempt, LLM_MAX_ATTEMPTS, delay,
+                )
+                time.sleep(delay)
+                delay *= 3
+                continue
+            logger.exception("LLM request failed")
+            return None
+
+
+def _to_classification(d: dict) -> Optional[EmailClassification]:
+    try:
+        return EmailClassification(
+            is_application_confirmation=bool(d.get("is_application_confirmation", False)),
+            company=str(d.get("company") or ""),
+            role=str(d.get("role") or ""),
+            confidence=str(d.get("confidence") or "low"),
         )
-        parsed = resp.parsed
-        if parsed is None:
-            logger.warning("Gemini returned no parseable classification (subject=%r)", subject)
-        return parsed
     except Exception:
-        logger.exception("LLM classification failed (subject=%r)", subject)
         return None
+
+
+def classify_with_llm(from_header: str, subject: str, body: str) -> Optional[EmailClassification]:
+    """Single-email classification (used by tests / one-offs; the sync endpoint
+    uses the batched path below)."""
+    content = (
+        f"From: {from_header}\nSubject: {subject}\n\n{(body or '')[:2500]}\n\n"
+        'Respond with JSON: {"is_application_confirmation": true|false, '
+        '"company": "...", "role": "...", "confidence": "high"|"medium"|"low"}. '
+        'Use "" for company or role if unknown.'
+    )
+    data = _call_llm(content, 400)
+    if not isinstance(data, dict):
+        return None
+    result = _to_classification(data)
+    if result is None:
+        logger.warning("unparseable LLM classification (subject=%r): %r", subject, data)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -333,27 +450,121 @@ class Decision:
     method: str  # "rules" | "llm" | "rules+llm"
 
 
-def classify_email(from_header: str, subject: str, body: str) -> Decision:
-    rule = run_rules(from_header, subject, body)
+@dataclass
+class EmailInput:
+    key: str  # opaque id (e.g. Gmail message id) used to align results
+    from_header: str
+    subject: str
+    body: str
 
-    # Fast path: rules are confident enough to act without spending a token.
+
+def _merge(rule: RuleResult, llm: Optional[EmailClassification]) -> Decision:
+    if llm is None:
+        # LLM unavailable/skipped/errored - trust rules, flag for a human look.
+        if rule.is_application:
+            return Decision(True, rule.company, rule.role, True, "rules")
+        return Decision(False, None, None, False, "rules")
+
+    method = "rules+llm" if rule.is_application else "llm"
+    if llm.is_application_confirmation:
+        company = (llm.company or "").strip() or rule.company
+        role = (llm.role or "").strip() or rule.role
+        needs_review = (not company) or (llm.confidence or "").lower() == "low"
+        return Decision(True, company, role, needs_review, method)
+    return Decision(False, None, None, False, method)
+
+
+def classify_email(from_header: str, subject: str, body: str, *, use_llm: bool = True) -> Decision:
+    rule = run_rules(from_header, subject, body)
     if rule.is_application and rule.company and rule.confidence == "high":
         return Decision(True, rule.company, rule.role, False, "rules")
+    llm = classify_with_llm(from_header, subject, body) if use_llm else None
+    return _merge(rule, llm)
 
-    llm = classify_with_llm(from_header, subject, body)
 
-    if llm is not None:
-        method = "rules+llm" if rule.is_application else "llm"
-        if llm.is_application_confirmation:
-            company = (llm.company or "").strip() or rule.company
-            role = (llm.role or "").strip() or rule.role
-            needs_review = (not company) or (llm.confidence or "").lower() == "low"
-            return Decision(True, company, role, needs_review, method)
-        # LLM says it isn't an application; trust it (the confident-rule case
-        # already returned above).
-        return Decision(False, None, None, False, method)
+BATCH_SIZE = int(os.getenv("CLASSIFIER_BATCH_SIZE", "10"))
 
-    # LLM unavailable - fall back to the rule verdict, flagged for a human look.
-    if rule.is_application:
-        return Decision(True, rule.company, rule.role, True, "rules")
-    return Decision(False, None, None, False, "rules")
+
+def _classify_chunk_llm(chunk: list[EmailInput]) -> dict[str, EmailClassification]:
+    """Classify up to BATCH_SIZE emails in a single request."""
+    parts = [
+        f"=== EMAIL {i} ===\nFrom: {it.from_header}\nSubject: {it.subject}\n\n"
+        f"{(it.body or '')[:1800]}"
+        for i, it in enumerate(chunk)
+    ]
+    content = (
+        "Classify each email below.\n\n" + "\n\n".join(parts) + "\n\n"
+        'Respond with JSON: {"results": [{"index": <int>, '
+        '"is_application_confirmation": true|false, "company": "...", "role": "...", '
+        '"confidence": "high"|"medium"|"low"}, ...]} - exactly one object per email, '
+        "where index is the number after 'EMAIL'. Use \"\" for company or role if unknown."
+    )
+    data = _call_llm(content, 300 * len(chunk) + 256)
+    if data is None:
+        return {}  # call path already logged why
+    rows = data.get("results") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        logger.warning("LLM batch response had no 'results' list (%d emails): %r", len(chunk), data)
+        return {}
+
+    out: dict[str, EmailClassification] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            idx = int(row["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= idx < len(chunk):
+            parsed = _to_classification(row)
+            if parsed is not None:
+                out[chunk[idx].key] = parsed
+    return out
+
+
+def classify_emails(
+    items: list[EmailInput],
+    *,
+    use_llm: bool = True,
+    llm_budget: Optional[int] = None,
+) -> dict[str, Decision]:
+    """Classify many emails, batching LLM calls. Returns {key: Decision}.
+
+    ``llm_budget`` caps how many emails may be sent to the LLM this run. Emails
+    over the budget get a Decision with ``method == "deferred"`` - the caller
+    should persist nothing for those so they are reclassified on the next run.
+    """
+    from dataclasses import replace
+
+    rules: dict[str, RuleResult] = {}
+    results: dict[str, Decision] = {}
+    pending: list[EmailInput] = []
+
+    for it in items:
+        r = run_rules(it.from_header, it.subject, it.body)
+        rules[it.key] = r
+        if r.is_application and r.company and r.confidence == "high":
+            results[it.key] = Decision(True, r.company, r.role, False, "rules")
+        else:
+            pending.append(it)
+
+    if not use_llm:
+        # LLM off entirely: the rules verdict is final (not deferred).
+        for it in pending:
+            results[it.key] = _merge(rules[it.key], None)
+        return results
+
+    budget = len(pending) if llm_budget is None else max(0, llm_budget)
+    to_llm, overflow = pending[:budget], pending[budget:]
+
+    for start in range(0, len(to_llm), BATCH_SIZE):
+        chunk = to_llm[start:start + BATCH_SIZE]
+        llm_map = _classify_chunk_llm(chunk)
+        for it in chunk:
+            results[it.key] = _merge(rules[it.key], llm_map.get(it.key))
+
+    # over budget this run - persist nothing, reclassify next run
+    for it in overflow:
+        results[it.key] = replace(_merge(rules[it.key], None), method="deferred")
+
+    return results
