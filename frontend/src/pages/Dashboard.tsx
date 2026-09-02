@@ -1,7 +1,7 @@
+import { useState, useEffect, useMemo } from "react";
 import KanbanBoard from "../components/Kanban";
 import { API_BASE_URL } from "../api/api";
 import DateInput from "../components/DateInput";
-import { useState, useEffect } from "react";
 
 interface Applications {
   id: string;
@@ -18,6 +18,7 @@ interface APIResponse {
 const Dashboard = () => {
   const [startDate, setStartDate] = useState("");
   const [apps, setApps] = useState<Applications[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     listAllJobs();
@@ -37,14 +38,18 @@ const Dashboard = () => {
       setApps([]);
     }
   };
-  // pass date next to check
+
   const refresh = async () => {
+    setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/gmail-service/fetch-applications`, {
-        method: "GET",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-      });
+      const response = await fetch(
+        `${API_BASE_URL}/gmail-service/fetch-applications`,
+        {
+          method: "GET",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
 
       if (!response.ok) {
         console.error("Something went wrong");
@@ -56,6 +61,8 @@ const Dashboard = () => {
     } catch (error) {
       console.error("Error fetching applications:", error);
       setApps([]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -75,34 +82,85 @@ const Dashboard = () => {
     }
   };
 
+  const tally = useMemo(() => {
+    const sent = apps.filter((a) => a.status === "sent").length;
+    const active = apps.filter((a) => a.status === "process").length;
+    const rejected = apps.filter((a) => a.status === "rejected").length;
+    const total = apps.length;
+    const responded = active + rejected;
+    const rate = total ? Math.round((responded / total) * 100) : 0;
+    return { sent, active, rejected, total, rate };
+  }, [apps]);
+
+  const today = new Date().toISOString().slice(0, 10);
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
-      <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
+    <div className="wrap stack-4">
+      <header className="stack-2">
+        <div className="row row--between row--baseline">
+          <span className="wordmark" style={{ fontSize: "2rem" }} aria-label="job">
+            j<span className="redact" aria-hidden="true" />
+            <span className="sr-only">o</span>b
+          </span>
+          <span className="eyebrow">dispatch log &middot; {today}</span>
+        </div>
+        <hr className="rule" />
+      </header>
 
-      <div className="flex flex-col md:flex-row items-center gap-4 mb-6">
-        <p className="font-bold"> Start Date: </p> <DateInput onDateChange={(date) => setStartDate(date)} />
+      <section className="receipt stack-1" aria-label="Summary">
+        <div className="lead">
+          <span>Total dispatched</span>
+          <span className="lead__f" />
+          <span className="lead__v">{tally.total}</span>
+        </div>
+        <div className="lead">
+          <span>Sent</span>
+          <span className="lead__f" />
+          <span className="lead__v">{tally.sent}</span>
+        </div>
+        <div className="lead">
+          <span>In process</span>
+          <span className="lead__f" />
+          <span className="lead__v">{tally.active}</span>
+        </div>
+        <div className="lead">
+          <span>Rejected</span>
+          <span className="lead__f" />
+          <span className="lead__v">{tally.rejected}</span>
+        </div>
+        <hr className="hair" />
+        <div className="lead lead--strong">
+          <span>Response rate</span>
+          <span className="lead__f" />
+          <span className="lead__v">{tally.rate}%</span>
+        </div>
+      </section>
 
-        <button
-          onClick={refresh}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg shadow transition duration-150"
-        >
-          Refresh
-        </button>
+      <section className="stack-1">
+        <span className="eyebrow">Controls</span>
+        <div className="row">
+          <span className="eyebrow">Start date</span>
+          <DateInput onDateChange={(date) => setStartDate(date)} />
+          <button
+            className="btn btn--solid"
+            onClick={refresh}
+            disabled={loading}
+          >
+            {loading ? "Refreshing" : "Refresh"}
+          </button>
+          <button className="btn" onClick={dateset} disabled={loading}>
+            Sync by date
+          </button>
+          <span className="mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+            {startDate ? startDate : "no date set"}
+          </span>
+        </div>
+      </section>
 
-        <button
-          onClick={dateset}
-          className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-6 rounded-lg shadow transition duration-150"
-        >
-          Sync by Date
-        </button>
-
-        <span className="text-gray-400 text-sm ml-2">
-          {startDate ? `Selected: ${startDate}` : "No date selected"}
-        </span>
-      </div>
-
-      {/* Pass apps to Kanban */}
-      <KanbanBoard apps={apps} />
+      <section className="stack-1">
+        <span className="eyebrow">Pipeline</span>
+        <KanbanBoard apps={apps} loading={loading} />
+      </section>
     </div>
   );
 };
