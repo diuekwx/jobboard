@@ -88,6 +88,70 @@ def test_rejection_keeps_company_and_role():
     assert rule.is_rejection and not rule.is_application
 
 
+# Verbatim from a real Amazon decline that the first cut of the rules read as a
+# confirmation: it opens with "Thank you for your application", says no with
+# "decided not to progress" (a verb the strong list did not have), and arrives
+# from the employer's own domain - which handed it a high-confidence company and
+# so skipped the LLM that would have caught it.
+AMAZON_FROM = "noreply@mail.amazon.jobs"
+AMAZON_SUBJECT = "Amazon application: Status update"
+AMAZON_BODY = (
+    "Hi Jerison, "
+    "Thank you for your application for the position of Software Development "
+    "Engineer Internship - Fall 2026 (US) (ID: 3012345). After careful "
+    "consideration, we've decided not to progress with your application for "
+    "this role. While we're unable to share additional details about this "
+    "decision, we'd like to keep in touch regarding future job opportunities. "
+    "Thanks again for your interest in working at Amazon. "
+    "Best regards, Amazon Recruiting Team"
+)
+
+
+def test_employer_own_domain_decline_is_a_rejection():
+    rule = run_rules(AMAZON_FROM, AMAZON_SUBJECT, AMAZON_BODY)
+    assert rule.kind == KIND_REJECTION
+    assert rule.company == "Amazon"
+    assert rule.role.startswith("Software Development Engineer")
+
+
+def test_soft_decline_signal_forfeits_the_llm_skipping_shortcut():
+    """A confirmation carrying one soft decline hint must not be marked
+    high-confidence, or the sync never sends it to the model."""
+    body = (
+        "Thank you for applying to Acme. Unfortunately our careers portal was "
+        "slow while you submitted."
+    )
+    rule = run_rules("Acme <no-reply@acme.com>", "Thank you for applying", body)
+    assert rule.kind == KIND_CONFIRMATION
+    assert rule.confidence == "low"
+
+
+def test_clean_confirmation_keeps_the_shortcut():
+    body = "Thank you for applying to Acme. We have received your application."
+    rule = run_rules("Acme <no-reply@acme.com>", "Thank you for applying", body)
+    assert rule.kind == KIND_CONFIRMATION
+    assert rule.confidence == "high"
+
+
+# "keep in touch about future opportunities" is rejection boilerplate AND the
+# way a recruiter opens a cold pitch, so a soft-signals-only verdict needs some
+# sign the mail is about an application the recipient actually made.
+NOT_REJECTIONS = [
+    ("Jane <jane@acmerecruiting.com>", "Opportunities at Acme",
+     "I came across your profile. I'd love to keep in touch about future job "
+     "opportunities at Acme."),
+    ("Sam <sam@globex.com>", "Great chatting",
+     "Great speaking today. Let's keep in touch regarding future roles on the team."),
+    ("Acme <news@acme.com>", "Acme monthly",
+     "See our future openings and keep in touch for news about the company."),
+]
+
+
+@pytest.mark.parametrize(("from_header", "subject", "body"), NOT_REJECTIONS)
+def test_soft_phrases_without_an_application_are_not_declines(from_header, subject, body):
+    assert run_rules(from_header, subject, body).kind != KIND_REJECTION
+
+
 def test_ats_sender_does_not_become_the_company():
     rule = run_rules(
         "Acme via Greenhouse <no-reply@acme.greenhouse.io>",

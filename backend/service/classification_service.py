@@ -91,7 +91,7 @@ _REJECTION_STRONG_PATTERNS = [
     r"(?:moving|move|proceeding|going) (?:forward|ahead) with other (?:candidates|applicants)",
     r"(?:will |we )?(?:are |will )?not (?:be )?(?:moving|move|proceeding|progressing|continuing) (?:forward|ahead|you)",
     r"not (?:be )?(?:moving|proceeding) (?:forward|ahead) with your (?:application|candidacy)",
-    r"(?:decided|chosen|elected) not to (?:move|proceed|continue|advance)",
+    r"(?:decided|chosen|elected|opted) not to (?:move|proceed|continue|advance|progress|go)",
     r"(?:pursue|pursuing|move forward with) other (?:candidates|applicants|applications)",
     r"other candidates whose (?:qualifications|experience|background|skills)",
     r"(?:your )?application (?:was|has been|is) (?:unfortunately )?(?:not successful|unsuccessful)",
@@ -106,6 +106,9 @@ _REJECTION_STRONG_PATTERNS = [
     r"decided to move forward with (?:a|other) candidate",
     r"not (?:a|the) (?:right|best) (?:fit|match) (?:for|at) (?:this|the) (?:time|role|position)",
     r"will not be (?:extending|advancing|inviting)",
+    r"(?:unable|not able) to (?:progress|advance|move forward with) your "
+    r"(?:application|candidacy)",
+    r"not (?:be )?progressing (?:with )?your (?:application|candidacy)",
 ]
 
 _REJECTION_WEAK_PATTERNS = [
@@ -118,10 +121,23 @@ _REJECTION_WEAK_PATTERNS = [
     r"(?:this|the) (?:decision|process) was (?:not )?(?:an? )?(?:easy|difficult)",
     r"(?:we|i) appreciate the time you (?:took|invested|spent)",
     r"(?:will|we)(?:'ll| will)? (?:not )?(?:be )?keep(?:ing)? (?:you )?in mind for future",
-    r"future (?:openings|opportunities|roles|positions)",
+    r"future (?:\w+ )?(?:openings|opportunities|roles|positions)",
+    r"keep in (?:touch|contact)(?: with you)? (?:regarding|about|for)",
     r"decision (?:regarding|on|about) your application",
     r"update (?:on|regarding) your application",
 ]
+
+# Soft rejection phrases ("keep in touch about future opportunities") are also
+# how a recruiter opens a cold pitch. A weak-signals-only verdict therefore
+# also requires some sign the mail is about an application the recipient made.
+_ABOUT_AN_APPLICATION = re.compile(
+    r"your (?:job )?(?:application|candidacy|submission)"
+    r"|application (?:id|number|reference|status)"
+    r"|\bapplicants?\b"
+    r"|\bapplied\b"
+    r"|\bapply(?:ing)?\b",
+    re.I,
+)
 
 _GENERIC_NAME = re.compile(
     r"\b(?:no[-\s]?reply|noreply|donotreply|do[-\s]?not[-\s]?reply|recruit(?:ing|ment)?|"
@@ -301,6 +317,21 @@ def looks_like_confirmation(subject: str, body: str) -> bool:
     return any(re.search(p, hay) for p in _CONFIRMATION_PATTERNS)
 
 
+def _rejection_scan(subject: str, body: str) -> tuple[bool, int]:
+    """``(hit_an_unmistakable_phrase, number_of_usable_soft_hits)``.
+
+    Soft hits are zeroed out when nothing in the mail refers to an application,
+    so recruiter outreach offering to "keep in touch about future
+    opportunities" is not read as a decline.
+    """
+    hay = _haystack(subject, body)
+    strong = any(re.search(p, hay) for p in _REJECTION_STRONG_PATTERNS)
+    if not _ABOUT_AN_APPLICATION.search(hay):
+        return strong, 0
+    weak = sum(1 for p in _REJECTION_WEAK_PATTERNS if re.search(p, hay))
+    return strong, weak
+
+
 def looks_like_rejection(subject: str, body: str) -> tuple[bool, str]:
     """``(is_rejection, strength)`` where strength is ``"strong"`` | ``"weak"`` | ``"none"``.
 
@@ -308,10 +339,9 @@ def looks_like_rejection(subject: str, body: str) -> tuple[bool, str]:
     ("unfortunately") is reported as no rejection - the LLM can still say
     otherwise.
     """
-    hay = _haystack(subject, body)
-    if any(re.search(p, hay) for p in _REJECTION_STRONG_PATTERNS):
+    strong, weak = _rejection_scan(subject, body)
+    if strong:
         return True, "strong"
-    weak = sum(1 for p in _REJECTION_WEAK_PATTERNS if re.search(p, hay))
     if weak >= 2:
         return True, "weak"
     return False, "none"
@@ -319,7 +349,7 @@ def looks_like_rejection(subject: str, body: str) -> tuple[bool, str]:
 
 def run_rules(from_header: str, subject: str, body: str) -> RuleResult:
     name, _email, domain = parse_from(from_header)
-    is_rej, strength = looks_like_rejection(subject, body)
+    strong_rej, weak_rej = _rejection_scan(subject, body)
     is_conf = looks_like_confirmation(subject, body)
     from_ats = is_ats_domain(domain)
     company, conf = _guess_company(name, domain, subject, body)
@@ -327,14 +357,20 @@ def run_rules(from_header: str, subject: str, body: str) -> RuleResult:
 
     # Rejections routinely open with confirmation wording ("Thank you for your
     # interest in Acme...") so they are checked first and win the tie.
-    if is_rej:
-        confidence = "high" if (strength == "strong" and company and conf == "high") else "low"
+    if strong_rej or weak_rej >= 2:
+        confidence = "high" if (strong_rej and company and conf == "high") else "low"
         return RuleResult(KIND_REJECTION, company, role, confidence)
 
     if not (is_conf or (from_ats and company)):
         return RuleResult(KIND_OTHER, company, role, "low")
 
-    confidence = "high" if (is_conf and company and conf == "high") else "low"
+    # A high-confidence verdict skips the LLM entirely, so only claim it when
+    # nothing about the mail hints at a decline. One soft hit under confirmation
+    # wording is exactly how a rejection reads, and the phrase lists will never
+    # cover every employer's way of saying no - hand those to the model.
+    confidence = (
+        "high" if (is_conf and company and conf == "high" and weak_rej == 0) else "low"
+    )
     return RuleResult(KIND_CONFIRMATION, company, role, confidence)
 
 

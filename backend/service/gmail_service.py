@@ -47,6 +47,9 @@ _BODY_TERMS = " OR ".join([
     '"your application was not successful"',
     '"not been selected"',
     '"position has been filled"',
+    '"decided not to progress"',
+    '"not to progress with your application"',
+    '"unable to progress your application"',
 ])
 
 
