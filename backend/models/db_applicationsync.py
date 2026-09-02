@@ -13,7 +13,7 @@ class ApplicationSync(Base):
 
     start_date: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.now(timezone.utc))
 
-    last_synced_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    last_synced_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(

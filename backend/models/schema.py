@@ -17,8 +17,8 @@ class UserOut(BaseModel):
 class ApplicationCreate(BaseModel):
     company: Optional[str] = None
     position: str
-    status: str
-    time: datetime
+    status: str = "applied"
+    time: Optional[datetime] = None
 
 class ApplicationOut(BaseModel):
     company_name: str
