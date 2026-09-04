@@ -1,4 +1,11 @@
-import { dayOf, type ApplicationStatus } from "../types";
+import {
+  dayOf,
+  daysUntil,
+  momentOf,
+  stageLabel,
+  type ApplicationEvent,
+  type ApplicationStatus,
+} from "../types";
 
 interface KanbanCardProps {
   id: string;
@@ -6,11 +13,25 @@ interface KanbanCardProps {
   role?: string | null;
   date: string;
   status: ApplicationStatus;
+  /** The raw backend status, which carries the stage inside "In Process". */
+  stage: string;
   index: number;
   permalink?: string | null;
   needsReview?: boolean;
   rejectedAt?: string | null;
+  nextEvent?: ApplicationEvent | null;
 }
+
+/** "in 7d" / "tomorrow" / "today" / "4d ago" — the countdown that makes the
+ *  In Process pane worth scanning. */
+const countdown = (at?: string | null): string => {
+  const days = daysUntil(at);
+  if (days === null) return "";
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days === -1) return "yesterday";
+  return days > 0 ? `in ${days}d` : `${-days}d ago`;
+};
 
 const KanbanCard = ({
   id,
@@ -18,13 +39,18 @@ const KanbanCard = ({
   role,
   date,
   status,
+  stage,
   index,
   permalink,
   needsReview,
   rejectedAt,
+  nextEvent,
 }: KanbanCardProps) => {
   const name = company || "—";
   const closed = status === "rejected" ? dayOf(rejectedAt) : "";
+  const label = status === "process" ? stageLabel(stage) : "";
+  const when = nextEvent?.at ? momentOf(nextEvent.at) : "";
+  const due = countdown(nextEvent?.at);
 
   return (
     <div
@@ -66,6 +92,24 @@ const KanbanCard = ({
         {role ? `${role} · ` : ""}applied {dayOf(date)}
         {closed ? ` · closed ${closed}` : ""}
       </span>
+
+      {label && (
+        <span className="entry__stage">
+          <span className="tag">{label}</span>
+          {when && (
+            <span
+              className={`entry__when${
+                nextEvent?.past ? " entry__when--past" : ""
+              }`}
+              title={nextEvent?.title}
+            >
+              {when}
+              {due ? ` · ${due}` : ""}
+            </span>
+          )}
+          {!when && <span className="entry__when">no date given</span>}
+        </span>
+      )}
     </div>
   );
 };

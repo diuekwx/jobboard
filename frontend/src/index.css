@@ -263,6 +263,20 @@ a {
   color: var(--ink);
   font-weight: 600;
 }
+/* Stage breakdown sitting under "In process" — indented and quieter, so the
+   receipt still reads as one column of totals. */
+.lead--sub {
+  padding-left: 1.1rem;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.up-next__kind {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.66rem;
+  font-weight: 400;
+  opacity: 0.7;
+}
 
 /* ---- Panes (pipeline columns) --------------------------- */
 
@@ -452,6 +466,47 @@ a {
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+}
+
+/* ---- Stage line (In Process only) ----------------------- */
+
+.entry__stage {
+  grid-column: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  font-family: var(--f-mono);
+  font-size: 0.7rem;
+}
+
+/* An outlined slug rather than a filled chip: the board stays monochrome,
+   and the stage still reads at a glance. */
+.tag {
+  flex: none;
+  padding: 0.05rem 0.34rem;
+  border: 1px solid currentColor;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.entry__when {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.entry:hover .entry__when {
+  color: inherit;
+  opacity: 0.75;
+}
+/* A date that has gone by is struck through, the same way a closed
+   application is — the record stands, the deadline does not. */
+.entry__when--past {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  opacity: 0.6;
 }
 
 /* ---- Login ---------------------------------------------- */

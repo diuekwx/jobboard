@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import KanbanBoard from "../components/Kanban";
 import { API_BASE_URL } from "../api/api";
 import DateInput from "../components/DateInput";
-import { paneFor, type Application } from "../types";
+import { momentOf, paneFor, type Application } from "../types";
 
 interface APIResponse {
   message: string;
@@ -80,13 +80,35 @@ const Dashboard = () => {
   };
 
   const tally = useMemo(() => {
+    const at = (status: string) =>
+      apps.filter((a) => a.status?.toLowerCase() === status).length;
     const sent = apps.filter((a) => paneFor(a.status) === "sent").length;
     const active = apps.filter((a) => paneFor(a.status) === "process").length;
     const rejected = apps.filter((a) => paneFor(a.status) === "rejected").length;
     const total = apps.length;
     const responded = active + rejected;
     const rate = total ? Math.round((responded / total) * 100) : 0;
-    return { sent, active, rejected, total, rate };
+    return {
+      sent,
+      active,
+      rejected,
+      total,
+      rate,
+      assessment: at("assessment"),
+      interview: at("interview"),
+    };
+  }, [apps]);
+
+  /** The next thing actually on the calendar, across every application. */
+  const upNext = useMemo(() => {
+    const dated = apps
+      .filter((a) => a.next_event?.at && !a.next_event.past)
+      .sort(
+        (a, b) =>
+          new Date(a.next_event!.at!).getTime() -
+          new Date(b.next_event!.at!).getTime()
+      );
+    return dated[0] ?? null;
   }, [apps]);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -120,6 +142,20 @@ const Dashboard = () => {
           <span className="lead__f" />
           <span className="lead__v">{tally.active}</span>
         </div>
+        {tally.assessment > 0 && (
+          <div className="lead lead--sub">
+            <span>Assessment</span>
+            <span className="lead__f" />
+            <span className="lead__v">{tally.assessment}</span>
+          </div>
+        )}
+        {tally.interview > 0 && (
+          <div className="lead lead--sub">
+            <span>Interview</span>
+            <span className="lead__f" />
+            <span className="lead__v">{tally.interview}</span>
+          </div>
+        )}
         <div className="lead">
           <span>Rejected</span>
           <span className="lead__f" />
@@ -131,6 +167,19 @@ const Dashboard = () => {
           <span className="lead__f" />
           <span className="lead__v">{tally.rate}%</span>
         </div>
+        {upNext && (
+          <div className="lead lead--strong">
+            <span>
+              Up next &middot; {upNext.company ?? "—"}
+              <span className="up-next__kind">
+                {" "}
+                {upNext.next_event?.type}
+              </span>
+            </span>
+            <span className="lead__f" />
+            <span className="lead__v">{momentOf(upNext.next_event?.at)}</span>
+          </div>
+        )}
       </section>
 
       <section className="stack-1">

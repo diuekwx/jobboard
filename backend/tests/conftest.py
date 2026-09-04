@@ -1,8 +1,12 @@
-"""In-memory SQLite fixtures. Nothing here touches the real DATABASE_URL."""
+"""In-memory SQLite fixtures and a stubbed Gmail API.
+
+Nothing here touches the real DATABASE_URL, the network, or the LLM.
+"""
 
 import os
 import sys
 import uuid
+from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine
@@ -44,3 +48,43 @@ def user_id(db):
     db.add(user)
     db.commit()
     return user.id
+
+
+# --- stubbed Gmail --------------------------------------------------------
+
+from backend.api import gmail as gmail_api  # noqa: E402
+from backend.models.db_integrationtokens import IntegrationToken  # noqa: E402
+from backend.service import classification_service  # noqa: E402
+from backend.tests.gmail_stub import FakeGmail  # noqa: E402
+
+
+@pytest.fixture()
+def stub_gmail(monkeypatch):
+    """Returns a setter: hand it a list of raw messages for the next sync.
+
+    The LLM is switched off (``_get_client`` returns None) so the rules layer
+    decides on its own.
+    """
+    monkeypatch.setattr(classification_service, "_get_client", lambda: None)
+    monkeypatch.setattr(gmail_api, "refresh_google_token", lambda db, token: token)
+
+    box: list = []
+    monkeypatch.setattr(gmail_api, "_build_gmail", lambda token: FakeGmail(box))
+
+    def load(messages):
+        box[:] = messages
+    return load
+
+
+@pytest.fixture()
+def connected(db, user_id):
+    """A user with a Gmail token on file, which the endpoint requires."""
+    db.add(IntegrationToken(
+        user_id=user_id,
+        provider="gmail",
+        access_token="a",
+        refresh_token="r",
+        expires_at=datetime(2030, 1, 1),
+    ))
+    db.commit()
+    return user_id

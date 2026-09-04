@@ -1,21 +1,16 @@
-"""End-to-end pass through /fetch-applications with a stubbed Gmail API.
+"""End-to-end pass through /fetch-applications for confirmations and declines.
 
-The LLM is switched off (``_get_client`` returns None) so the rules layer
-decides, which keeps the test hermetic.
+The stubbed Gmail API, the connected user and the ``sync`` helper all come
+from conftest, which also switches the LLM off so the rules layer decides.
 """
 
-import base64
 from datetime import datetime, timezone
 
-import pytest
-
-from backend.api import gmail as gmail_api
 from backend.models.db_application import Application
-from backend.models.db_integrationtokens import IntegrationToken
 from backend.models.db_processedmessage import ProcessedMessage
 from backend.models.db_response import RecruiterResponse
-from backend.service import classification_service
 from backend.service.jobs_service import REJECTED_STATUS
+from backend.tests.gmail_stub import message as _message, sync
 
 CONFIRMATION = (
     "Thank you for applying to the Backend Engineer position at Acme. "
@@ -26,91 +21,6 @@ REJECTION = (
     "to move forward with other candidates whose experience more closely "
     "matches what the role requires."
 )
-
-
-def _message(mid, thread, from_header, subject, body, received):
-    return {
-        "id": mid,
-        "threadId": thread,
-        "internalDate": str(int(received.timestamp() * 1000)),
-        "payload": {
-            "headers": [
-                {"name": "From", "value": from_header},
-                {"name": "Subject", "value": subject},
-            ],
-            "mimeType": "text/plain",
-            "body": {"data": base64.urlsafe_b64encode(body.encode()).decode()},
-        },
-    }
-
-
-class _Exec:
-    def __init__(self, value):
-        self._value = value
-
-    def execute(self):
-        return self._value
-
-
-class _Messages:
-    def __init__(self, messages):
-        self._messages = messages
-
-    def list(self, **_kw):
-        return _Exec({"messages": [{"id": m["id"]} for m in self._messages]})
-
-    def get(self, *, userId, id, format):
-        return _Exec(next(m for m in self._messages if m["id"] == id))
-
-
-class _FakeGmail:
-    def __init__(self, messages):
-        self._messages = _Messages(messages)
-
-    def users(self):
-        return self
-
-    def messages(self):
-        return self._messages
-
-
-@pytest.fixture()
-def stub_gmail(monkeypatch):
-    """Returns a setter: hand it a list of raw messages for the next sync."""
-    monkeypatch.setattr(classification_service, "_get_client", lambda: None)
-    monkeypatch.setattr(gmail_api, "refresh_google_token", lambda db, token: token)
-
-    box: list = []
-    monkeypatch.setattr(gmail_api, "_build_gmail", lambda token: _FakeGmail(box))
-
-    def load(messages):
-        box[:] = messages
-    return load
-
-
-class _User:
-    """Only ``.id`` is read off the user inside the endpoint."""
-
-    def __init__(self, user_id):
-        self.id = user_id
-
-
-@pytest.fixture()
-def connected(db, user_id):
-    """A user with a Gmail token on file, which the endpoint requires."""
-    db.add(IntegrationToken(
-        user_id=user_id,
-        provider="gmail",
-        access_token="a",
-        refresh_token="r",
-        expires_at=datetime(2030, 1, 1),
-    ))
-    db.commit()
-    return user_id
-
-
-def sync(db, user_id):
-    return gmail_api.fetch_job_applications(current_user=_User(user_id), db=db)
 
 
 def test_confirmation_then_rejection_moves_the_application(db, connected, stub_gmail):
@@ -171,6 +81,8 @@ def test_unmatched_rejection_creates_a_rejected_row_for_review(db, connected, st
 def test_unmatched_rejection_is_dropped_when_creation_is_disabled(
     db, connected, stub_gmail, monkeypatch
 ):
+    from backend.api import gmail as gmail_api
+
     monkeypatch.setattr(gmail_api, "CREATE_FROM_REJECTION", False)
     stub_gmail([_message(
         "m1", "t1", "Globex Talent <careers@globex.com>",

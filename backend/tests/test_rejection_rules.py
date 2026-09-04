@@ -4,6 +4,7 @@ import pytest
 
 from backend.service.classification_service import (
     KIND_CONFIRMATION,
+    KIND_INTERVIEW,
     KIND_OTHER,
     KIND_REJECTION,
     classify_email,
@@ -65,7 +66,7 @@ def test_two_soft_signals_are_enough():
 
 def test_interview_invite_is_not_a_rejection():
     body = "We would love to schedule a 30 minute conversation. Please pick a time that works."
-    assert kind("Next steps", body) == KIND_OTHER
+    assert kind("Next steps", body) == KIND_INTERVIEW
 
 
 def test_job_alert_is_neither():

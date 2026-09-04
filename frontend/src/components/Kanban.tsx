@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import KanbanCard from "./KanbanCard";
-import { paneFor, type Application, type ApplicationStatus } from "../types";
+import {
+  paneFor,
+  stageRank,
+  type Application,
+  type ApplicationStatus,
+} from "../types";
 
 const columns: { id: ApplicationStatus; title: string }[] = [
   { id: "sent", title: "Sent" },
@@ -21,6 +26,28 @@ type PaneProps = {
 };
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
+
+const FAR_FUTURE = 8.64e15; // sorts undated entries last
+
+/**
+ * In Process is the pane with a clock on it, so it leads with whatever is due
+ * soonest. An entry with no date sits below the dated ones, furthest-along
+ * stage first. The other panes keep the order the backend sent.
+ */
+const orderFor = (
+  status: ApplicationStatus,
+  entries: Application[]
+): Application[] => {
+  if (status !== "process") return entries;
+  const dueAt = (a: Application) => {
+    const at = a.next_event?.at;
+    const parsed = at ? new Date(at).getTime() : NaN;
+    return Number.isNaN(parsed) ? FAR_FUTURE : parsed;
+  };
+  return [...entries].sort(
+    (a, b) => dueAt(a) - dueAt(b) || stageRank(b.status) - stageRank(a.status)
+  );
+};
 
 const SKELETON_ROWS = [
   ["58%", "36%"],
@@ -44,14 +71,16 @@ const PaneLoading = () => (
 const Pane = ({ title, status, entries, loading }: PaneProps) => {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
+  const ordered = orderFor(status, entries);
   const shown = q
-    ? entries.filter(
+    ? ordered.filter(
         (e) =>
           (e.company ?? "").toLowerCase().includes(q) ||
           (e.role ?? "").toLowerCase().includes(q) ||
+          e.status.toLowerCase().includes(q) ||
           e.date.includes(q)
       )
-    : entries;
+    : ordered;
 
   return (
     <section className="pane">
@@ -95,10 +124,12 @@ const Pane = ({ title, status, entries, loading }: PaneProps) => {
               role={item.role}
               date={item.date}
               status={status}
+              stage={item.status}
               index={idx}
               permalink={item.permalink}
               needsReview={item.needs_review}
               rejectedAt={item.rejected_at}
+              nextEvent={item.next_event}
             />
           ))
         )}

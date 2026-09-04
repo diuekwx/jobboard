@@ -15,6 +15,15 @@ _ATS_FROM = " OR ".join([
     "ashbyhq.com", "icims.com", "smartrecruiters.com", "workable.com",
     "jobvite.com", "bamboohr.com", "teamtailor.com", "breezy.hr",
     "recruitee.com", "hire.google.com", "eightfold.ai",
+    # assessment platforms and interview schedulers - the mail that moves an
+    # application into "In Process" usually comes from one of these, not the
+    # employer's own domain
+    "hackerrank.com", "hackerrankforwork.com", "codility.com", "codesignal.com",
+    "coderbyte.com", "hackerearth.com", "devskiller.com", "testgorilla.com",
+    "karat.com", "byteboard.dev", "woven.teams", "qualified.io",
+    "hirevue.com", "sparkhire.com", "willo.video", "pymetrics.com",
+    "calendly.com", "goodtime.io", "modernloop.io", "chilipiper.com",
+    "cronofy.com", "savvycal.com", "cal.com",
 ])
 
 _SUBJECT_TERMS = " OR ".join([
@@ -29,6 +38,14 @@ _SUBJECT_TERMS = " OR ".join([
     '"regarding your application"', '"application status"',
     '"status of your application"', '"your recent application"',
     '"your candidacy"', '"your job application"',
+    # next-step subjects: assessments and interview scheduling
+    '"online assessment"', '"coding assessment"', '"technical assessment"',
+    '"coding challenge"', '"take home"', '"take-home"', '"assessment invitation"',
+    '"skills assessment"', '"next step"', '"next steps"',
+    '"interview invitation"', '"invitation to interview"', '"schedule your interview"',
+    '"schedule an interview"', '"interview request"', '"interview confirmation"',
+    '"phone screen"', '"phone interview"', '"technical interview"',
+    '"your interview"', '"your availability"', '"book a time"',
 ])
 
 # Phrases distinctive enough to search unqualified, i.e. against the message
@@ -50,6 +67,14 @@ _BODY_TERMS = " OR ".join([
     '"unable to progress your application"',
     '"not to move forward"',
     '"no longer available at this time"',
+    # next-step wording that is unmistakable enough to search body text
+    '"complete the online assessment"', '"complete your online assessment"',
+    '"invite you to complete"', '"invitation to complete"',
+    '"we would like to invite you to interview"',
+    '"like to invite you to an interview"',
+    '"schedule some time to chat"', '"find a time that works"',
+    '"select a time that works"', '"share your availability"',
+    '"let us know your availability"', '"book a time with"',
 ])
 
 
@@ -58,7 +83,8 @@ def build_query(after_epoch: int) -> str:
 
     Deliberately broad — the classifier does the real filtering. Searches all
     mail (not just the inbox) so filtered/labelled recruiting mail is still seen.
-    Covers both application confirmations and rejections.
+    Covers application confirmations, rejections, and the next-step mail
+    (assessments, interview scheduling) that moves an application into process.
     """
     return (
         f"(subject:({_SUBJECT_TERMS}) OR from:({_ATS_FROM}) OR ({_BODY_TERMS})) "

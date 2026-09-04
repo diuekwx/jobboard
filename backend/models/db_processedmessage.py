@@ -24,7 +24,9 @@ class ProcessedMessage(Base):
         ForeignKey("applications.id", ondelete="SET NULL"), nullable=True
     )
 
-    # created | needs_review | duplicate_thread | not_application | error
+    # created | needs_review | duplicate_thread | not_application
+    # | rejected | rejection_duplicate | rejection_unmatched
+    # | assessment | interview | stage_duplicate | advance_unmatched | error
     outcome: Mapped[str] = mapped_column(String(32))
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

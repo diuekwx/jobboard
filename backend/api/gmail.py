@@ -13,6 +13,7 @@ from backend.models.db_integrationtokens import IntegrationToken
 from backend.models.db_processedmessage import ProcessedMessage
 from backend.models.db_users import User
 from backend.service.classification_service import (
+    ADVANCING_KINDS,
     KIND_CONFIRMATION,
     KIND_REJECTION,
     EmailInput,
@@ -20,8 +21,9 @@ from backend.service.classification_service import (
 )
 from backend.service.gmail_service import build_query, extract_body_text, get_header
 from backend.service.jobs_service import (
+    advance_application,
     create_email_application,
-    find_application_for_rejection,
+    find_application_for_email,
     get_application_by_thread,
     list_jobs,
     mark_application_rejected,
@@ -43,6 +45,12 @@ _CHUNK = int(os.getenv("GMAIL_SYNC_CHUNK", "10"))
 # application predates the scan window. Recording it (flagged for review) is
 # more useful than dropping it; set to 0 to only ever update existing rows.
 CREATE_FROM_REJECTION = os.getenv("GMAIL_CREATE_APP_FROM_REJECTION", "1") not in (
+    "", "0", "false", "False",
+)
+# Same reasoning for an assessment or interview invite with nothing tracked
+# behind it: the invite proves an application exists, so stand a row up for it
+# already at that stage rather than losing a live opportunity off the board.
+CREATE_FROM_ADVANCE = os.getenv("GMAIL_CREATE_APP_FROM_ADVANCE", "1") not in (
     "", "0", "false", "False",
 )
 
@@ -104,8 +112,9 @@ def fetch_job_applications(
     service = _build_gmail(token)
     candidate_ids = _list_candidate_ids(service, build_query(after_epoch))
 
-    summary = {"created": [], "rejected": [], "needs_review": 0, "skipped": 0,
-               "not_application": 0, "unmatched_rejections": 0, "deferred": 0}
+    summary = {"created": [], "rejected": [], "advanced": [], "needs_review": 0,
+               "skipped": 0, "not_application": 0, "unmatched_rejections": 0,
+               "unmatched_advances": 0, "deferred": 0}
 
     if not candidate_ids:
         mark_synced(db, current_user.id)
@@ -151,7 +160,7 @@ def fetch_job_applications(
     for start in range(0, len(records), _CHUNK):
         chunk = records[start:start + _CHUNK]
         decisions = classify_emails(
-            [EmailInput(mid, frm, subj, body) for (mid, frm, subj, _t, body, _r) in chunk],
+            [EmailInput(mid, frm, subj, body, rec) for (mid, frm, subj, _t, body, rec) in chunk],
             llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
         )
 
@@ -171,15 +180,84 @@ def fetch_job_applications(
                 gmail_thread_id=thread_id,
             )
 
-            if decision.kind not in (KIND_CONFIRMATION, KIND_REJECTION):
+            if decision.kind not in (KIND_CONFIRMATION, KIND_REJECTION, *ADVANCING_KINDS):
                 ledger.outcome = "not_application"
                 ledger.detail = f"{decision.method}: {subject[:180]}"
                 db.add(ledger)
                 summary["not_application"] += 1
                 continue
 
+            if decision.is_advance:
+                # An interview invite that only matches a closed application is
+                # a new requisition, not a reopening - open_only keeps the old
+                # outcome intact and sends this down the "create" path instead.
+                target = find_application_for_email(
+                    db, current_user.id,
+                    thread_id=thread_id,
+                    company=decision.company,
+                    role=decision.role,
+                    open_only=True,
+                )
+                invented = target is None
+
+                if invented:
+                    if not (CREATE_FROM_ADVANCE and decision.company):
+                        ledger.outcome = "advance_unmatched"
+                        ledger.detail = f"{decision.method}: {subject[:180]}"
+                        db.add(ledger)
+                        summary["unmatched_advances"] += 1
+                        continue
+                    target = create_email_application(
+                        db,
+                        current_user.id,
+                        company=decision.company,
+                        role=decision.role,
+                        status="sent",
+                        application_date=received,
+                        gmail_message_id=mid,
+                        gmail_thread_id=thread_id,
+                        needs_review=True,
+                    )
+                    summary["unmatched_advances"] += 1
+                    summary["needs_review"] += 1
+
+                previous = target.status
+                moved = advance_application(
+                    db, target,
+                    stage=decision.kind,
+                    sender=from_header,
+                    subject=subject,
+                    body=body,
+                    received_at=received,
+                    when=decision.when,
+                    duration=decision.duration,
+                    source_message_id=mid,
+                )
+                ledger.application_id = target.id
+                ledger.outcome = decision.kind if moved else "stage_duplicate"
+                ledger.detail = decision.method
+                db.add(ledger)
+
+                if moved:
+                    summary["advanced"].append({
+                        "id": str(target.id),
+                        "company": target.company_name,
+                        "role": target.position,
+                        "stage": decision.kind,
+                        "from": previous,
+                        "when": decision.when.isoformat() if decision.when else None,
+                        "date": received.isoformat(),
+                        "was_tracked": not invented,
+                        "method": decision.method,
+                    })
+                else:
+                    # already at this stage or further along; the mail is filed
+                    # and any date it carried has been folded into the event
+                    summary["skipped"] += 1
+                continue
+
             if decision.kind == KIND_REJECTION:
-                target = find_application_for_rejection(
+                target = find_application_for_email(
                     db, current_user.id,
                     thread_id=thread_id,
                     company=decision.company,
@@ -282,6 +360,8 @@ def fetch_job_applications(
         db.commit()
 
     parts = [f"added {len(summary['created'])}"]
+    if summary["advanced"]:
+        parts.append(f"{len(summary['advanced'])} in process")
     if summary["rejected"]:
         parts.append(f"{len(summary['rejected'])} rejected")
     if summary["deferred"]:
