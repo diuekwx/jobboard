@@ -38,11 +38,20 @@ class _Messages:
     def __init__(self, messages):
         self._messages = messages
 
-    def list(self, **_kw):
-        return _Exec({"messages": [{"id": m["id"]} for m in self._messages]})
+    def list(self, **kw):
+        start = int(kw.get("pageToken") or 0)
+        size = kw.get("maxResults") or 100
+        page = self._messages[start:start + size]
+        result = {"messages": [{"id": m["id"]} for m in page]}
+        if start + size < len(self._messages):
+            result["nextPageToken"] = str(start + size)
+        return _Exec(result)
 
     def get(self, *, userId, id, format):
-        return _Exec(next(m for m in self._messages if m["id"] == id))
+        found = next(m for m in self._messages if m["id"] == id)
+        if found.get("fetch_error"):
+            raise RuntimeError("simulated Gmail fetch failure")
+        return _Exec(found)
 
 
 class FakeGmail:

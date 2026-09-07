@@ -69,21 +69,53 @@ def _build_gmail(token: IntegrationToken):
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-def _list_candidate_ids(service, query: str) -> list[str]:
+def _list_candidate_ids(
+    service,
+    query: str,
+    db: Session,
+    user_id,
+) -> tuple[list[str], bool]:
     ids: list[str] = []
+    seen: set[str] = set()
     page_token = None
-    while len(ids) < MAX_MESSAGES_PER_SYNC:
+    while True:
         resp = service.users().messages().list(
             userId="me",
             q=query,
             pageToken=page_token,
-            maxResults=min(100, MAX_MESSAGES_PER_SYNC - len(ids)),
+            maxResults=100,
         ).execute()
-        ids.extend(m["id"] for m in resp.get("messages", []))
+        page_ids = [
+            message["id"]
+            for message in resp.get("messages", [])
+            if message.get("id") and message["id"] not in seen
+        ]
+        seen.update(page_ids)
+
+        lookups = {
+            blind_index(mid, context="processed_messages.gmail_message_id"): mid
+            for mid in page_ids
+        }
+        processed = {
+            value
+            for (value,) in db.query(ProcessedMessage.gmail_message_lookup).filter(
+                ProcessedMessage.user_id == user_id,
+                ProcessedMessage.gmail_message_lookup.in_(lookups),
+            )
+        } if lookups else set()
+
+        for lookup, mid in lookups.items():
+            if lookup in processed:
+                continue
+            ids.append(mid)
+            if len(ids) == MAX_MESSAGES_PER_SYNC:
+                page_token = resp.get("nextPageToken")
+                page_complete = mid == page_ids[-1]
+                return ids, page_complete and not page_token
+
         page_token = resp.get("nextPageToken")
         if not page_token:
-            break
-    return ids
+            return ids, True
 
 
 @router.get("/fetch-applications")
@@ -92,6 +124,7 @@ def fetch_job_applications(
     db: Session = Depends(get_db),
 ):
     sync_row = get_or_create_sync(db, current_user.id)
+    checkpoint_at = datetime.now(timezone.utc)
     after_epoch = int(search_after_datetime(sync_row).timestamp())
 
     token = db.query(IntegrationToken).filter(
@@ -111,37 +144,30 @@ def fetch_job_applications(
         }
 
     service = _build_gmail(token)
-    candidate_ids = _list_candidate_ids(service, build_query(after_epoch))
+    candidate_ids, scan_complete = _list_candidate_ids(
+        service,
+        build_query(after_epoch),
+        db,
+        current_user.id,
+    )
 
     summary = {"created": [], "rejected": [], "advanced": [], "needs_review": 0,
                "skipped": 0, "not_application": 0, "unmatched_rejections": 0,
-               "unmatched_advances": 0, "deferred": 0}
+               "unmatched_advances": 0, "deferred": 0, "failed": 0}
 
     if not candidate_ids:
-        mark_synced(db, current_user.id)
+        if scan_complete:
+            mark_synced(db, current_user.id, checkpoint_at)
         return {"message": "No new job application emails found.", "applications": list_jobs(db, current_user.id), **summary}
-
-    candidate_lookups = {
-        blind_index(mid, context="processed_messages.gmail_message_id"): mid
-        for mid in candidate_ids
-    }
-    already_lookups = {
-        value for (value,) in db.query(ProcessedMessage.gmail_message_lookup).filter(
-            ProcessedMessage.user_id == current_user.id,
-            ProcessedMessage.gmail_message_lookup.in_(candidate_lookups),
-        )
-    }
-    to_process = [
-        mid for lookup, mid in candidate_lookups.items() if lookup not in already_lookups
-    ]
 
     # --- phase 1: fetch + extract every candidate message ---
     records = []  # (mid, from, subject, thread_id, body, received)
-    for mid in to_process:
+    for mid in candidate_ids:
         try:
             full = service.users().messages().get(userId="me", id=mid, format="full").execute()
         except Exception:
             logger.exception("failed to fetch a Gmail message")
+            summary["failed"] += 1
             continue
 
         payload = full.get("payload", {}) or {}
@@ -159,6 +185,8 @@ def fetch_job_applications(
             extract_body_text(payload),
             received,
         ))
+
+    records.sort(key=lambda record: (record[5], record[0]))
 
     # --- phase 2+3: classify and apply in chunks, committing progress per chunk ---
     # so an interrupted/timed-out sync keeps what it finished and never re-sends
@@ -366,8 +394,8 @@ def fetch_job_applications(
 
     # Only advance the watermark once nothing is left deferred, so a deferred
     # email older than the lookback window can't fall outside the next query.
-    if summary["deferred"] == 0:
-        sync_row.last_synced_at = datetime.now(timezone.utc)
+    if scan_complete and summary["deferred"] == 0 and summary["failed"] == 0:
+        sync_row.last_synced_at = checkpoint_at
         db.commit()
 
     parts = [f"added {len(summary['created'])}"]
@@ -377,9 +405,11 @@ def fetch_job_applications(
         parts.append(f"{len(summary['rejected'])} rejected")
     if summary["deferred"]:
         parts.append(f"{summary['deferred']} deferred (Refresh again)")
+    if summary["failed"]:
+        parts.append(f"{summary['failed']} failed (Refresh again)")
     return {
         "message": (
-            f"Scanned {len(candidate_ids)} email(s), {len(to_process)} new — "
+            f"Scanned {len(candidate_ids)} new email(s) — "
             + ", ".join(parts) + "."
         ),
         "applications": list_jobs(db, current_user.id),
