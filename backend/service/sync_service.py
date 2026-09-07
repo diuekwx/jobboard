@@ -23,8 +23,12 @@ def sync(db: Session, user_id: uuid.UUID, day: datetime):
     row = db.query(ApplicationSync).filter(ApplicationSync.user_id == user_id).first()
 
     if row:
-        if row.start_date != day:
+        previous_start = _aware(row.start_date)
+        requested_start = _aware(day)
+        if previous_start != requested_start:
             row.start_date = day
+        if requested_start < previous_start:
+            row.last_synced_at = None
         row.updated_at = now
         db.commit()
         db.refresh(row)
@@ -68,10 +72,14 @@ def search_after_datetime(row: ApplicationSync) -> datetime:
     return _aware(base) - timedelta(days=LOOKBACK_DAYS)
 
 
-def mark_synced(db: Session, user_id: uuid.UUID) -> None:
+def mark_synced(
+    db: Session,
+    user_id: uuid.UUID,
+    synced_at: datetime | None = None,
+) -> None:
     row = db.query(ApplicationSync).filter(ApplicationSync.user_id == user_id).first()
     if row:
-        row.last_synced_at = datetime.now(timezone.utc)
+        row.last_synced_at = synced_at or datetime.now(timezone.utc)
         db.commit()
 
 
