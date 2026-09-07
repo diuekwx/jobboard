@@ -6,6 +6,7 @@ Nothing here touches the real DATABASE_URL, the network, or the LLM.
 import os
 import sys
 import uuid
+import base64
 from datetime import datetime
 
 import pytest
@@ -16,7 +17,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 # backend.db.session builds an engine at import time; the tests never use it,
 # but importing the API modules would fail without a URL to hand it.
-os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+os.environ["DATABASE_URL"] = "sqlite://"
+os.environ["SECRET_KEY"] = "test-only-signing-key"
+os.environ["SESSION_SECRET_KEY"] = "test-only-session-key"
+os.environ["ALGORITHM"] = "HS256"
+os.environ["DATA_ENCRYPTION_KEY"] = base64.urlsafe_b64encode(bytes(range(32))).decode()
+os.environ["DATA_ENCRYPTION_KEY_ID"] = "test-v1"
 
 from backend.db.base_class import Base  # noqa: E402
 from backend.models import (  # noqa: E402,F401  (imported for table registration)
