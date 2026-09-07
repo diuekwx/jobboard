@@ -73,6 +73,7 @@ def stub_gmail(monkeypatch):
     decides on its own.
     """
     monkeypatch.setattr(classification_service, "_get_client", lambda: None)
+    monkeypatch.setattr(gmail_api, "LLM_BUDGET_PER_SYNC", 0)
     monkeypatch.setattr(gmail_api, "refresh_google_token", lambda db, token: token)
 
     box: list = []

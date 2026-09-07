@@ -90,16 +90,28 @@ and duplicate runs. The live Gmail API has not been exercised by these tests.
 
 ## 5. LLM fallback reliability
 
-- [ ] Separate classification from Gmail fetching and database updates.
-- [ ] Define a shared, validated classification-result format that a future browser processor could also produce.
-- [ ] Validate allowed categories, field lengths, message identifiers, and completeness of batch results.
-- [ ] Add explicit timeouts and account for attempted requests/emails, retries, tokens, and elapsed time.
-- [ ] Keep failed classifications pending; distinguish intentional rules-only operation from a model outage.
-- [ ] Improve excerpts by removing quoted history and boilerplate while preserving relevant evidence.
-- [ ] Supply received timestamps for relative dates and treat email instructions as untrusted data.
-- [ ] Require review for ambiguous classifications and application matches rather than trusting model confidence alone.
+- [x] Separate classification from Gmail fetching and database updates.
+- [x] Define a shared, validated classification-result format that a future browser processor could also produce.
+- [x] Validate allowed categories, field lengths, message identifiers, and completeness of batch results.
+- [x] Add explicit timeouts and account for attempted requests/emails, retries, tokens, and elapsed time.
+- [x] Keep failed classifications pending; distinguish intentional rules-only operation from a model outage.
+- [x] Improve excerpts by removing quoted history and boilerplate while preserving relevant evidence.
+- [x] Supply received timestamps for relative dates and treat email instructions as untrusted data.
+- [x] Require review for ambiguous classifications and application matches rather than trusting model confidence alone.
 
 **Done when:** malformed output and provider outages cannot silently finalize incorrect results.
+
+**2026-09-06 implementation:** Added a strict portable classification contract,
+complete message-ID-aligned batch validation, sanitized excerpts, received-time
+anchors, prompt-injection boundaries, explicit request timeouts, and sync-level
+request/retry/token/latency accounting. A zero LLM budget is reported as
+intentional rules-only operation; model outages, invalid or incomplete output,
+and budget overflow remain pending without ledger writes or checkpoint advance.
+Model-only, conflicting, low-confidence, and ambiguous application matches are
+marked for review. Automated tests cover contract limits, incomplete batches,
+outages, rules-only mode, retries, timeouts, usage accounting, excerpt cleanup,
+untrusted content, and ambiguous matching. Live provider behavior has not been
+exercised.
 
 ## 6. Background scanning and bounded concurrency
 

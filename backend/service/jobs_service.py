@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func
@@ -161,6 +162,32 @@ def find_application_for_email(
     role: str | None,
     open_only: bool = False,
 ) -> Application | None:
+    return match_application_for_email(
+        db,
+        user_id,
+        thread_id=thread_id,
+        company=company,
+        role=role,
+        open_only=open_only,
+    ).application
+
+
+@dataclass(frozen=True)
+class ApplicationMatch:
+    application: Application | None
+    ambiguous: bool = False
+    method: str = "none"
+
+
+def match_application_for_email(
+    db: Session,
+    user_id: uuid.UUID,
+    *,
+    thread_id: str | None,
+    company: str | None,
+    role: str | None,
+    open_only: bool = False,
+) -> ApplicationMatch:
     """Best guess at which application a follow-up e-mail is about.
 
     Thread id first (exact, when the mail lands in the confirmation's thread),
@@ -176,11 +203,11 @@ def find_application_for_email(
     """
     threaded = get_application_by_thread(db, user_id, thread_id)
     if threaded and not (open_only and threaded.status not in OPEN_STATUSES):
-        return threaded
+        return ApplicationMatch(threaded, False, "thread")
 
     key = normalize_company(company)
     if not key:
-        return None
+        return ApplicationMatch(None)
 
     candidates = [
         app for app in db.query(Application).filter(Application.user_id == user_id)
@@ -188,7 +215,7 @@ def find_application_for_email(
         and not (open_only and app.status not in OPEN_STATUSES)
     ]
     if not candidates:
-        return None
+        return ApplicationMatch(None)
 
     def rank(app: Application):
         return (
@@ -197,7 +224,16 @@ def find_application_for_email(
             _date_key(app.application_date),
         )
 
-    return max(candidates, key=rank)
+    chosen = max(candidates, key=rank)
+    preferred_open = [app for app in candidates if app.status in OPEN_STATUSES]
+    plausible = preferred_open or candidates
+    same_role = [app for app in plausible if _roles_match(role, app.position)]
+    finalists = same_role or plausible
+    return ApplicationMatch(
+        chosen,
+        ambiguous=len(finalists) > 1,
+        method="company_role" if same_role else "company",
+    )
 
 
 # Kept for callers that only ever deal with declines.

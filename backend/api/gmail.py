@@ -23,10 +23,10 @@ from backend.service.gmail_service import build_query, extract_body_text, get_he
 from backend.service.jobs_service import (
     advance_application,
     create_email_application,
-    find_application_for_email,
     get_application_by_thread,
     list_jobs,
     mark_application_rejected,
+    match_application_for_email,
 )
 from backend.service.oauth_service import refresh_google_token
 from backend.security.encryption import blind_index
@@ -153,12 +153,32 @@ def fetch_job_applications(
 
     summary = {"created": [], "rejected": [], "advanced": [], "needs_review": 0,
                "skipped": 0, "not_application": 0, "unmatched_rejections": 0,
-               "unmatched_advances": 0, "deferred": 0, "failed": 0}
+               "unmatched_advances": 0, "ambiguous_matches": 0,
+               "deferred": 0, "failed": 0}
+    classification = {
+        "mode": "rules_only" if LLM_BUDGET_PER_SYNC <= 0 else "llm_fallback",
+        "pending_by_reason": {
+            "budget": 0,
+            "model_unavailable": 0,
+            "invalid_model_output": 0,
+        },
+        "metrics": {
+            "attempted_requests": 0,
+            "attempted_emails": 0,
+            "retries": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "elapsed_ms": 0,
+            "request_failures": 0,
+            "invalid_responses": 0,
+        },
+    }
 
     if not candidate_ids:
         if scan_complete:
             mark_synced(db, current_user.id, checkpoint_at)
-        return {"message": "No new job application emails found.", "applications": list_jobs(db, current_user.id), **summary}
+        return {"message": "No new job application emails found.", "applications": list_jobs(db, current_user.id), "classification": classification, **summary}
 
     # --- phase 1: fetch + extract every candidate message ---
     records = []  # (mid, from, subject, thread_id, body, received)
@@ -196,8 +216,16 @@ def fetch_job_applications(
         chunk = records[start:start + _CHUNK]
         decisions = classify_emails(
             [EmailInput(mid, frm, subj, body, rec) for (mid, frm, subj, _t, body, rec) in chunk],
+            use_llm=LLM_BUDGET_PER_SYNC > 0,
             llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
         )
+        run_metrics = getattr(decisions, "metrics", None)
+        if run_metrics is not None:
+            values = run_metrics.as_dict()
+            for name, value in values.items():
+                classification["metrics"][name] += value
+            llm_used += values["attempted_emails"]
+            classification["mode"] = getattr(decisions, "mode", classification["mode"])
 
         for mid, from_header, subject, thread_id, body, received in chunk:
             decision = decisions[mid]
@@ -205,9 +233,10 @@ def fetch_job_applications(
             # over this run's LLM budget - persist nothing, reclassify next sync
             if decision.method == "deferred":
                 summary["deferred"] += 1
+                reason = getattr(decision, "pending_reason", None)
+                if reason in classification["pending_by_reason"]:
+                    classification["pending_by_reason"][reason] += 1
                 continue
-            if decision.method in ("llm", "rules+llm"):
-                llm_used += 1
 
             ledger = ProcessedMessage(
                 user_id=current_user.id,
@@ -232,13 +261,14 @@ def fetch_job_applications(
                 # An interview invite that only matches a closed application is
                 # a new requisition, not a reopening - open_only keeps the old
                 # outcome intact and sends this down the "create" path instead.
-                target = find_application_for_email(
+                match = match_application_for_email(
                     db, current_user.id,
                     thread_id=thread_id,
                     company=decision.company,
                     role=decision.role,
                     open_only=True,
                 )
+                target = match.application
                 invented = target is None
 
                 if invented:
@@ -261,6 +291,13 @@ def fetch_job_applications(
                     )
                     summary["unmatched_advances"] += 1
                     summary["needs_review"] += 1
+
+                if match.ambiguous:
+                    summary["ambiguous_matches"] += 1
+                if decision.needs_review or match.ambiguous:
+                    if not target.needs_review:
+                        summary["needs_review"] += 1
+                    target.needs_review = True
 
                 previous = target.status
                 moved = advance_application(
@@ -297,12 +334,13 @@ def fetch_job_applications(
                 continue
 
             if decision.kind == KIND_REJECTION:
-                target = find_application_for_email(
+                match = match_application_for_email(
                     db, current_user.id,
                     thread_id=thread_id,
                     company=decision.company,
                     role=decision.role,
                 )
+                target = match.application
                 invented = target is None
 
                 if invented:
@@ -328,6 +366,13 @@ def fetch_job_applications(
                     )
                     summary["unmatched_rejections"] += 1
                     summary["needs_review"] += 1
+
+                if match.ambiguous:
+                    summary["ambiguous_matches"] += 1
+                if decision.needs_review or match.ambiguous:
+                    if not target.needs_review:
+                        summary["needs_review"] += 1
+                    target.needs_review = True
 
                 changed = mark_application_rejected(
                     db, target,
@@ -413,5 +458,6 @@ def fetch_job_applications(
             + ", ".join(parts) + "."
         ),
         "applications": list_jobs(db, current_user.id),
+        "classification": classification,
         **summary,
     }

@@ -91,13 +91,13 @@ def test_deferred_message_is_retried_before_checkpoint_advances(
     original = gmail_api.classify_emails
     calls = 0
 
-    def defer_once(emails, llm_budget):
+    def defer_once(emails, llm_budget, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
             decision = type("Decision", (), {"method": "deferred"})()
             return {email.key: decision for email in emails}
-        return original(emails, llm_budget=llm_budget)
+        return original(emails, llm_budget=llm_budget, **kwargs)
 
     monkeypatch.setattr(gmail_api, "classify_emails", defer_once)
     stub_gmail([_newsletter(1)])
@@ -152,12 +152,12 @@ def test_interrupted_scan_keeps_committed_chunks_and_resumes(
     original = gmail_api.classify_emails
     calls = 0
 
-    def interrupt_second_chunk(emails, llm_budget):
+    def interrupt_second_chunk(emails, llm_budget, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("simulated interruption")
-        return original(emails, llm_budget=llm_budget)
+        return original(emails, llm_budget=llm_budget, **kwargs)
 
     monkeypatch.setattr(gmail_api, "classify_emails", interrupt_second_chunk)
     stub_gmail([_newsletter(2), _newsletter(1)])
