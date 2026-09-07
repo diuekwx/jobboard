@@ -29,6 +29,7 @@ from backend.service.jobs_service import (
     mark_application_rejected,
 )
 from backend.service.oauth_service import refresh_google_token
+from backend.security.encryption import blind_index
 from backend.service.sync_service import get_or_create_sync, mark_synced, search_after_datetime
 
 logger = logging.getLogger(__name__)
@@ -120,13 +121,19 @@ def fetch_job_applications(
         mark_synced(db, current_user.id)
         return {"message": "No new job application emails found.", "applications": list_jobs(db, current_user.id), **summary}
 
-    already = {
-        mid for (mid,) in db.query(ProcessedMessage.gmail_message_id).filter(
+    candidate_lookups = {
+        blind_index(mid, context="processed_messages.gmail_message_id"): mid
+        for mid in candidate_ids
+    }
+    already_lookups = {
+        value for (value,) in db.query(ProcessedMessage.gmail_message_lookup).filter(
             ProcessedMessage.user_id == current_user.id,
-            ProcessedMessage.gmail_message_id.in_(candidate_ids),
+            ProcessedMessage.gmail_message_lookup.in_(candidate_lookups),
         )
     }
-    to_process = [mid for mid in candidate_ids if mid not in already]
+    to_process = [
+        mid for lookup, mid in candidate_lookups.items() if lookup not in already_lookups
+    ]
 
     # --- phase 1: fetch + extract every candidate message ---
     records = []  # (mid, from, subject, thread_id, body, received)
@@ -134,7 +141,7 @@ def fetch_job_applications(
         try:
             full = service.users().messages().get(userId="me", id=mid, format="full").execute()
         except Exception:
-            logger.exception("failed to fetch Gmail message %s", mid)
+            logger.exception("failed to fetch a Gmail message")
             continue
 
         payload = full.get("payload", {}) or {}
@@ -178,11 +185,17 @@ def fetch_job_applications(
                 user_id=current_user.id,
                 gmail_message_id=mid,
                 gmail_thread_id=thread_id,
+                gmail_message_lookup=blind_index(
+                    mid, context="processed_messages.gmail_message_id"
+                ),
+                gmail_thread_lookup=blind_index(
+                    thread_id, context="processed_messages.gmail_thread_id"
+                ),
             )
 
             if decision.kind not in (KIND_CONFIRMATION, KIND_REJECTION, *ADVANCING_KINDS):
                 ledger.outcome = "not_application"
-                ledger.detail = f"{decision.method}: {subject[:180]}"
+                ledger.detail = decision.method
                 db.add(ledger)
                 summary["not_application"] += 1
                 continue
@@ -203,7 +216,7 @@ def fetch_job_applications(
                 if invented:
                     if not (CREATE_FROM_ADVANCE and decision.company):
                         ledger.outcome = "advance_unmatched"
-                        ledger.detail = f"{decision.method}: {subject[:180]}"
+                        ledger.detail = decision.method
                         db.add(ledger)
                         summary["unmatched_advances"] += 1
                         continue
@@ -212,7 +225,7 @@ def fetch_job_applications(
                         current_user.id,
                         company=decision.company,
                         role=decision.role,
-                        status="sent",
+                        status="applied",
                         application_date=received,
                         gmail_message_id=mid,
                         gmail_thread_id=thread_id,
@@ -227,7 +240,6 @@ def fetch_job_applications(
                     stage=decision.kind,
                     sender=from_header,
                     subject=subject,
-                    body=body,
                     received_at=received,
                     when=decision.when,
                     duration=decision.duration,
@@ -268,7 +280,7 @@ def fetch_job_applications(
                 if invented:
                     if not (CREATE_FROM_REJECTION and decision.company):
                         ledger.outcome = "rejection_unmatched"
-                        ledger.detail = f"{decision.method}: {subject[:180]}"
+                        ledger.detail = decision.method
                         db.add(ledger)
                         summary["unmatched_rejections"] += 1
                         continue
@@ -280,7 +292,7 @@ def fetch_job_applications(
                         current_user.id,
                         company=decision.company,
                         role=decision.role,
-                        status="sent",
+                        status="applied",
                         application_date=received,
                         gmail_message_id=mid,
                         gmail_thread_id=thread_id,
@@ -293,7 +305,6 @@ def fetch_job_applications(
                     db, target,
                     sender=from_header,
                     subject=subject,
-                    body=body,
                     received_at=received,
                 )
                 ledger.application_id = target.id
@@ -329,7 +340,7 @@ def fetch_job_applications(
                 current_user.id,
                 company=decision.company,
                 role=decision.role,
-                status="sent",
+                status="applied",
                 application_date=received,
                 gmail_message_id=mid,
                 gmail_thread_id=thread_id,

@@ -46,7 +46,8 @@ def refresh_google_token(db: Session, integration_token: IntegrationToken) -> In
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.getenv("GOOGLE_CLIENT_ID"),
         client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-        expiry=integration_token.expires_at,
+        expiry=(integration_token.expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+                if integration_token.expires_at.tzinfo else integration_token.expires_at),
     )
 
     if creds.expired and creds.refresh_token:

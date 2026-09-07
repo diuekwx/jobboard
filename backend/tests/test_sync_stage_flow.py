@@ -46,7 +46,7 @@ def _apply(db, connected, stub_gmail):
 
 def test_an_assessment_moves_a_sent_application_into_process(db, connected, stub_gmail):
     app = _apply(db, connected, stub_gmail)
-    assert app.status == "sent"
+    assert app.status == "applied"
 
     stub_gmail([_message(
         "m2", "t2", ACME, "Your Acme online assessment", ASSESSMENT, MAR,
@@ -56,7 +56,7 @@ def test_an_assessment_moves_a_sent_application_into_process(db, connected, stub
     assert len(result["advanced"]) == 1
     moved = result["advanced"][0]
     assert moved["stage"] == ASSESSMENT_STATUS
-    assert moved["from"] == "sent"
+    assert moved["from"] == "applied"
     assert moved["was_tracked"] is True
     assert result["created"] == []
     assert db.query(Application).count() == 1

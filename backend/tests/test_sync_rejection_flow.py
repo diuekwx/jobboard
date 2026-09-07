@@ -34,7 +34,7 @@ def test_confirmation_then_rejection_moves_the_application(db, connected, stub_g
     assert first["rejected"] == []
 
     app = db.query(Application).one()
-    assert app.status == "sent"
+    assert app.status == "applied"
 
     # the decline arrives later, in its own thread
     stub_gmail([_message(
@@ -109,3 +109,21 @@ def test_the_same_rejection_is_never_applied_twice(db, connected, stub_gmail):
     assert second["rejected"] == []
     assert db.query(Application).count() == 1
     assert db.query(RecruiterResponse).count() == 1
+
+
+def test_processed_message_detail_does_not_retain_email_subject(
+    db, connected, stub_gmail
+):
+    private_subject = "PRIVATE SUBJECT 92831"
+    stub_gmail([_message(
+        "m1", "t1", "newsletter@example.com", private_subject,
+        "Here is this week's general newsletter.",
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+    )])
+
+    sync(db, connected)
+
+    ledger = db.query(ProcessedMessage).one()
+    assert ledger.outcome == "not_application"
+    assert ledger.detail == "rules"
+    assert private_subject not in ledger.detail

@@ -1,6 +1,7 @@
+from backend.db.types import EncryptedText, UTCDateTime
 from backend.db.base_class import Base
 from typing import Optional
-from sqlalchemy import ForeignKey, String, TIMESTAMP, UUID, Index
+from sqlalchemy import ForeignKey, String, TIMESTAMP, Uuid, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime, timezone
 import uuid
@@ -18,17 +19,19 @@ class Event(Base):
 
     __tablename__ = "events"
     __table_args__ = (
+        UniqueConstraint("application_id", "source_message_lookup", name="uq_event_application_message_lookup"),
         Index("ix_events_application_start", "application_id", "start_time"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
     event_type: Mapped[str] = mapped_column(String(50))  # "interview" | "assessment"
-    title: Mapped[str] = mapped_column(String(100))
-    start_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
-    end_time: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
-    source_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    google_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc))
+    title: Mapped[str] = mapped_column(EncryptedText("events.title"))
+    start_time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    end_time: Mapped[Optional[datetime]] = mapped_column(UTCDateTime(), nullable=True)
+    source_message_id: Mapped[Optional[str]] = mapped_column(EncryptedText("events.source_message_id"), nullable=True)
+    source_message_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    google_event_id: Mapped[Optional[str]] = mapped_column(EncryptedText("events.google_event_id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(timezone.utc))
 
     application: Mapped["Application"] = relationship(back_populates="events")

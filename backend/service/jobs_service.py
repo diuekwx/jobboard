@@ -10,6 +10,7 @@ from backend.models.db_application import Application
 from backend.models.db_event import Event
 from backend.models.db_response import RecruiterResponse
 from backend.models.schema import EditApplication, ApplicationCreate
+from backend.security.encryption import blind_index
 
 REJECTED_STATUS = "rejected"
 ASSESSMENT_STATUS = "assessment"
@@ -20,7 +21,6 @@ INTERVIEW_STATUS = "interview"
 # and a stray assessment reminder must not drag a candidate who has already
 # reached the interview stage back down.
 STAGE_RANK = {
-    "sent": 0,
     "applied": 0,
     "process": 1,
     ASSESSMENT_STATUS: 2,
@@ -29,7 +29,7 @@ STAGE_RANK = {
 }
 
 # Statuses that still count as live when deciding which application an e-mail
-# refers to. "sent" comes from the e-mail sync, "applied" from a manual entry.
+# refers to. Manual entries and email sync both start at "applied".
 OPEN_STATUSES = tuple(STAGE_RANK)
 
 # The stage an application lands in when a next-step e-mail arrives, keyed by
@@ -38,11 +38,10 @@ STAGE_STATUSES = (ASSESSMENT_STATUS, INTERVIEW_STATUS)
 
 
 def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate):
-    existing_job = db.query(Application).filter(
-        Application.company_name == data.company,
-        Application.position == data.position,
-        Application.user_id == user_id,
-    ).first()
+    existing_job = next((
+        app for app in db.query(Application).filter(Application.user_id == user_id)
+        if app.company_name == data.company and app.position == data.position
+    ), None)
     if existing_job:
         raise HTTPException(status_code=400, detail="Job already added")
 
@@ -51,7 +50,7 @@ def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate)
         company_name=data.company,
         position=data.position,
         status=data.status,
-        application_date=data.time or datetime.now(timezone.utc),
+        application_date=_aware(data.time).astimezone(timezone.utc).date() if data.time else datetime.now(timezone.utc).date(),
         source="manual",
     )
     db.add(new_job)
@@ -65,7 +64,9 @@ def get_application_by_thread(db: Session, user_id: uuid.UUID, thread_id: str | 
         return None
     return db.query(Application).filter(
         Application.user_id == user_id,
-        Application.gmail_thread_id == thread_id,
+        Application.gmail_thread_lookup == blind_index(
+            thread_id, context="applications.gmail_thread_id"
+        ),
     ).first()
 
 
@@ -91,10 +92,16 @@ def create_email_application(
         company_name=company or "Company Name Not Found",
         position=role,
         status=status,
-        application_date=application_date,
+        application_date=_aware(application_date).astimezone(timezone.utc).date(),
         source="email",
         gmail_message_id=gmail_message_id,
         gmail_thread_id=gmail_thread_id,
+        gmail_message_lookup=blind_index(
+            gmail_message_id, context="applications.gmail_message_id"
+        ),
+        gmail_thread_lookup=blind_index(
+            gmail_thread_id, context="applications.gmail_thread_id"
+        ),
         needs_review=needs_review,
     )
     db.add(job)
@@ -203,7 +210,6 @@ def mark_application_rejected(
     *,
     sender: str,
     subject: str,
-    body: str | None,
     received_at: datetime,
 ) -> bool:
     """Record the decline against ``app`` and move it to ``rejected``.
@@ -216,7 +222,6 @@ def mark_application_rejected(
         application_id=app.id,
         sender_email=(sender or "")[:255],
         subject=(subject or "")[:255],
-        body=body or None,
         received_at=received_at,
     ))
 
@@ -261,7 +266,9 @@ def upsert_event(
     """
     query = db.query(Event).filter(Event.application_id == app.id)
     existing = (
-        query.filter(Event.source_message_id == source_message_id).first()
+        query.filter(Event.source_message_lookup == blind_index(
+            source_message_id, context="events.source_message_id"
+        )).first()
         if source_message_id
         else query.filter(
             Event.event_type == event_type, Event.start_time == start_time
@@ -281,6 +288,9 @@ def upsert_event(
         start_time=start_time,
         end_time=end_time,
         source_message_id=source_message_id,
+        source_message_lookup=blind_index(
+            source_message_id, context="events.source_message_id"
+        ),
     )
     db.add(event)
     db.flush()
@@ -294,7 +304,6 @@ def advance_application(
     stage: str,
     sender: str,
     subject: str,
-    body: str | None,
     received_at: datetime,
     when: datetime | None = None,
     duration: timedelta | None = None,
@@ -316,7 +325,6 @@ def advance_application(
         application_id=app.id,
         sender_email=(sender or "")[:255],
         subject=(subject or "")[:255],
-        body=body or None,
         received_at=received_at,
     ))
 
@@ -368,8 +376,8 @@ def _next_event(events: list[Event], now: datetime) -> dict | None:
     return {
         "type": event.event_type,
         "title": event.title,
-        "at": event.start_time.isoformat() if event.start_time else None,
-        "ends_at": event.end_time.isoformat() if event.end_time else None,
+        "at": _aware(event.start_time).isoformat() if event.start_time else None,
+        "ends_at": _aware(event.end_time).isoformat() if event.end_time else None,
         "past": not upcoming,
     }
 
@@ -388,17 +396,6 @@ def rejected_at_map(db: Session, user_id: uuid.UUID) -> dict[uuid.UUID, datetime
         .all()
     )
     return {app_id: received for app_id, received in rows}
-
-
-def find_job(db: Session, user_id: uuid.UUID, company: str, position: str):
-    job = db.query(Application).filter(
-        Application.company_name == company,
-        Application.position == position,
-        Application.user_id == user_id,
-    ).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Application not found")
-    return job.id
 
 
 def update_job_application(db: Session, app_id: uuid.UUID, data: EditApplication, user_id: uuid.UUID):
@@ -438,7 +435,7 @@ def list_jobs(db: Session, user_id: uuid.UUID):
             "needs_review": job.needs_review,
             "next_event": _next_event(events.get(job.id, []), now),
             "rejected_at": (
-                replied_at.isoformat()
+                _aware(replied_at).isoformat()
                 if replied_at and job.status == REJECTED_STATUS else None
             ),
             "permalink": (

@@ -1,6 +1,7 @@
+from backend.db.types import EncryptedText, UTCDateTime
 from backend.db.base_class import Base
 from typing import Optional
-from sqlalchemy import ForeignKey, String, TIMESTAMP, UUID, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, TIMESTAMP, Uuid, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime, timezone
 import uuid
@@ -11,14 +12,16 @@ class ProcessedMessage(Base):
 
     __tablename__ = "processed_messages"
     __table_args__ = (
-        UniqueConstraint("user_id", "gmail_message_id", name="uq_processed_user_message"),
+        UniqueConstraint("user_id", "gmail_message_lookup", name="uq_processed_user_message_lookup"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
 
-    gmail_message_id: Mapped[str] = mapped_column(String(255), index=True)
-    gmail_thread_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gmail_message_id: Mapped[str] = mapped_column(EncryptedText("processed_messages.gmail_message_id"))
+    gmail_thread_id: Mapped[Optional[str]] = mapped_column(EncryptedText("processed_messages.gmail_thread_id"), nullable=True)
+    gmail_message_lookup: Mapped[str] = mapped_column(String(64), index=True)
+    gmail_thread_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
 
     application_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("applications.id", ondelete="SET NULL"), nullable=True
@@ -30,4 +33,4 @@ class ProcessedMessage(Base):
     outcome: Mapped[str] = mapped_column(String(32))
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    processed_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.now(timezone.utc))
+    processed_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(timezone.utc))

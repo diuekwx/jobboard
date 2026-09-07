@@ -756,7 +756,7 @@ def classify_with_llm(from_header: str, subject: str, body: str) -> Optional[Ema
         return None
     result = _to_classification(data)
     if result is None:
-        logger.warning("unparseable LLM classification (subject=%r): %r", subject, data)
+        logger.warning("unparseable LLM classification")
     return result
 
 
@@ -904,7 +904,7 @@ def _classify_chunk_llm(chunk: list[EmailInput]) -> dict[str, EmailClassificatio
         return {}  # call path already logged why
     rows = data.get("results") if isinstance(data, dict) else data
     if not isinstance(rows, list):
-        logger.warning("LLM batch response had no 'results' list (%d emails): %r", len(chunk), data)
+        logger.warning("LLM batch response had no 'results' list (%d emails)", len(chunk))
         return {}
 
     out: dict[str, EmailClassification] = {}

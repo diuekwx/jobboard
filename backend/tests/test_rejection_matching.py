@@ -18,7 +18,7 @@ from backend.service.jobs_service import (
 NOW = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def make_app(db, user_id, *, company, role=None, status="sent", thread=None, days_ago=0):
+def make_app(db, user_id, *, company, role=None, status="applied", thread=None, days_ago=0):
     app = create_email_application(
         db, user_id,
         company=company,
@@ -117,7 +117,6 @@ def test_mark_rejected_sets_status_and_files_the_email(db, user_id):
         db, app,
         sender="Acme Careers <no-reply@acme.com>",
         subject="Update on your application",
-        body="We are moving forward with other candidates.",
         received_at=NOW,
     )
     db.commit()
@@ -127,14 +126,14 @@ def test_mark_rejected_sets_status_and_files_the_email(db, user_id):
 
     response = db.query(RecruiterResponse).one()
     assert response.application_id == app.id
-    assert response.received_at == NOW.replace(tzinfo=None)
+    assert response.received_at == NOW
 
 
 def test_a_second_decline_is_filed_but_not_re_reported(db, user_id):
     app = make_app(db, user_id, company="Acme")
     for _ in range(2):
         changed = mark_application_rejected(
-            db, app, sender="a@acme.com", subject="s", body="b", received_at=NOW,
+            db, app, sender="a@acme.com", subject="s", received_at=NOW,
         )
     db.commit()
 
@@ -146,7 +145,7 @@ def test_a_second_decline_is_filed_but_not_re_reported(db, user_id):
 def test_overlong_headers_are_truncated_to_fit_the_column(db, user_id):
     app = make_app(db, user_id, company="Acme")
     mark_application_rejected(
-        db, app, sender="x" * 400, subject="y" * 400, body=None, received_at=NOW,
+        db, app, sender="x" * 400, subject="y" * 400,  received_at=NOW,
     )
     db.commit()
 
@@ -158,7 +157,7 @@ def test_overlong_headers_are_truncated_to_fit_the_column(db, user_id):
 def test_list_jobs_exposes_the_rejection_date(db, user_id):
     app = make_app(db, user_id, company="Acme")
     mark_application_rejected(
-        db, app, sender="a@acme.com", subject="s", body="b", received_at=NOW,
+        db, app, sender="a@acme.com", subject="s", received_at=NOW,
     )
     db.commit()
 
