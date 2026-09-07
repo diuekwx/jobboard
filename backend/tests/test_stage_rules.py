@@ -104,6 +104,18 @@ def test_a_job_alert_is_still_nothing():
     ).kind == KIND_OTHER
 
 
+def test_linkedin_confirmation_uses_the_employer_named_in_the_subject():
+    rule = run_rules(
+        "LinkedIn <jobs-noreply@linkedin.com>",
+        "Jerison, your application was sent to dimenso.ai",
+        "Your application was sent to dimenso.ai.",
+    )
+
+    assert rule.kind == KIND_CONFIRMATION
+    assert rule.company == "dimenso.ai"
+    assert (rule.company or "").lower() != "linkedin"
+
+
 def test_the_interview_time_rides_along_with_the_decision():
     body = (
         "We would like to invite you to an interview on March 17, 2026 at "

@@ -53,6 +53,9 @@ GENERIC_MAIL_DOMAINS = {
 # never the employer. Matched against the full domain and its registered
 # (last-two-label) form.
 ATS_DOMAINS = {
+    # Job-network notifications describe applications to third-party employers;
+    # the platform itself must never be inferred as the employer.
+    "linkedin.com",
     "greenhouse.io", "greenhouse-mail.io", "us.greenhouse.io",
     "lever.co", "hire.lever.co", "jobs.lever.co",
     "myworkday.com", "workday.com", "myworkdayjobs.com", "myworkdaysite.com",
@@ -225,7 +228,7 @@ _GENERIC_NAME = re.compile(
     r"\b(?:no[-\s]?reply|noreply|donotreply|do[-\s]?not[-\s]?reply|recruit(?:ing|ment)?|"
     r"talent(?:\s+acquisition)?|careers?|jobs|hr|human\s+resources|hiring(?:\s+team)?|"
     r"notifications?|team|people\s+ops|peopleops|candidate|applicant|workday|greenhouse|"
-    r"lever|ashby|icims|smartrecruiters|workable)\b",
+    r"lever|ashby|icims|smartrecruiters|workable|linkedin)\b",
     re.I,
 )
 
@@ -247,6 +250,11 @@ _COMPANY_PHRASE = re.compile(
     r"\b(?:applying to|application (?:to|at|with|for a position at)|position at|role at|"
     r"opportunity at|interest in(?: joining| working (?:at|for))?|interest in|joining)\s+"
     r"(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})",
+)
+_APPLICATION_SENT_TO = re.compile(
+    r"\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?sent\s+to\s+"
+    r"(?P<co>[A-Za-z0-9][\w&.\-]*(?:\s+[A-Za-z0-9][\w&.\-]*){0,3})\s*[!.]?\s*$",
+    re.I,
 )
 _COMPANY_AT_END = re.compile(r"\bat\s+(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})\s*[!.]?\s*$")
 
@@ -381,7 +389,7 @@ def _guess_company(name: str, domain: str, subject: str, body: str):
         return cleaned, "low"
 
     for text in (subject or "", (body or "")[:1000]):
-        for rx in (_COMPANY_PHRASE, _COMPANY_AT_END):
+        for rx in (_APPLICATION_SENT_TO, _COMPANY_PHRASE, _COMPANY_AT_END):
             m = rx.search(text)
             if m:
                 co = re.sub(r"\s+", " ", m.group("co")).strip(" .-")
