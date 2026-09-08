@@ -55,7 +55,7 @@ On Windows, stop Vite before reinstalling if npm reports EPERM on a native `.nod
 
 For Google sign-in/Gmail, supply your own OAuth web-client credentials in `.env`, register the exact callback URL shown in the example, and enable Gmail API access. Live OAuth requires provider configuration and is not covered by offline verification. Never commit credentials or tokens.
 
-The example sets the LLM budget to zero: rules run and ambiguous messages are deferred. To enable local inference, run an OpenAI-compatible endpoint matching `LLM_BASE_URL` and `CLASSIFIER_MODEL`, then raise `GMAIL_LLM_BUDGET_PER_SYNC` (for example, 40). Paid classification remains disabled by default.
+The example sets the LLM budget to zero, which is explicit rules-only mode: deterministic results are stored, with uncertain application records marked for review. To enable local inference, run an OpenAI-compatible endpoint matching `LLM_BASE_URL` and `CLASSIFIER_MODEL`, then raise `GMAIL_LLM_BUDGET_PER_SYNC` (for example, 40). In fallback mode, timeouts, provider failures, malformed output, incomplete batches, and messages over budget remain pending and do not advance the Gmail checkpoint. Sync responses expose non-sensitive request, retry, token, elapsed-time, and pending-reason counts under `classification`. Paid classification remains disabled by default.
 
 ## Dependencies and database lifecycle
 
