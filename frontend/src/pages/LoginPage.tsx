@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { API_BASE_URL } from "../api/api";
+import { apiFetch } from "../api/api";
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -8,10 +8,7 @@ export default function LoginPage() {
   const handleGoogleSignIn = async () => {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/gmail/auth/google`, {
-        method: "GET",
-        credentials: "include",
-      });
+      const response = await apiFetch("/gmail/auth/google");
       if (!response.ok) throw new Error("Google sign-in could not be started");
 
       const data: { auth_url?: string } = await response.json();

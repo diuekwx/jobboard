@@ -1,24 +1,29 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, model_validator
 from uuid import UUID
 from typing import Optional, Literal
-from datetime import datetime
+from datetime import date, datetime
 
 class UserOut(BaseModel):
     id: UUID
     email: EmailStr
+    gmail_connected: bool = False
 
     model_config = {"from_attributes": True}
 
 
-ApplicationStatus = Literal["applied", "process", "assessment", "interview", "offer", "rejected"]
+ApplicationStatus = Literal[
+    "applied", "process", "assessment", "interview", "offer",
+    "accepted", "withdrawn", "rejected",
+]
 
 
 class ApplicationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     company: str = Field(min_length=1, max_length=200)
-    position: str = Field(min_length=1, max_length=200)
+    position: Optional[str] = Field(default=None, max_length=200)
     status: ApplicationStatus = "applied"
     time: Optional[datetime] = None
+    notes: Optional[str] = Field(default=None, max_length=10000)
 
 
 class ApplicationOut(BaseModel):
@@ -35,6 +40,7 @@ class EditApplication(BaseModel):
     position: Optional[str] = Field(default=None, min_length=1, max_length=200)
     status: Optional[ApplicationStatus] = None
     notes: Optional[str] = Field(default=None, max_length=10000)
+    application_date: Optional[date] = None
 
     @model_validator(mode="after")
     def validate_patch(self):
@@ -55,6 +61,7 @@ class EditApplicationOut(BaseModel):
 
 class CredentialCreate(BaseModel):
     user_id: UUID
+    external_user_id: Optional[str] = None
     access_token: str
     refresh_token: Optional[str] = None
     expires_at: datetime
@@ -64,3 +71,7 @@ class GoogleCreate(BaseModel):
 
 class DateCreate(BaseModel):
     day: datetime
+
+
+class MergeApplication(BaseModel):
+    target_id: UUID

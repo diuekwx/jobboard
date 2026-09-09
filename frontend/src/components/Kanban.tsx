@@ -16,6 +16,7 @@ const columns: { id: ApplicationStatus; title: string }[] = [
 type KanbanBoardProps = {
   apps: Application[];
   loading?: boolean;
+  onManage: (application: Application) => void;
 };
 
 type PaneProps = {
@@ -23,6 +24,7 @@ type PaneProps = {
   status: ApplicationStatus;
   entries: Application[];
   loading?: boolean;
+  onManage: (application: Application) => void;
 };
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -75,7 +77,7 @@ const PaneLoading = () => (
   </div>
 );
 
-const Pane = ({ title, status, entries, loading }: PaneProps) => {
+const Pane = ({ title, status, entries, loading, onManage }: PaneProps) => {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const ordered = orderFor(status, entries);
@@ -136,7 +138,9 @@ const Pane = ({ title, status, entries, loading }: PaneProps) => {
               permalink={item.permalink}
               needsReview={item.needs_review}
               rejectedAt={item.rejected_at}
+              outcomeAt={item.outcome_at}
               nextEvent={item.next_event}
+              onManage={() => onManage(item)}
             />
           ))
         )}
@@ -145,7 +149,7 @@ const Pane = ({ title, status, entries, loading }: PaneProps) => {
   );
 };
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading, onManage }) => {
   return (
     <div className="panes">
       {columns.map((col) => (
@@ -155,6 +159,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading }) => {
           status={col.id}
           loading={loading}
           entries={apps.filter((item) => paneFor(item.status) === col.id)}
+          onManage={onManage}
         />
       ))}
     </div>

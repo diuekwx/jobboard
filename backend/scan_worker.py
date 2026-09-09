@@ -21,6 +21,7 @@ from backend.models import (  # noqa: F401
     db_applicationsync,
     db_event,
     db_integrationtokens,
+    db_applicationaction,
     db_processedmessage,
     db_response,
     db_scanjob,

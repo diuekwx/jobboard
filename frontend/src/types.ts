@@ -20,6 +20,9 @@ export interface Application {
   status: string;
   source?: string;
   needs_review?: boolean;
+  notes?: string | null;
+  archived_at?: string | null;
+  outcome_at?: string | null;
   permalink?: string | null;
   /** When the decline landed. Only set once an application is rejected. */
   rejected_at?: string | null;
@@ -35,6 +38,8 @@ const PANE_BY_STATUS: Record<string, ApplicationStatus> = {
   assessment: "process",
   interview: "process",
   offer: "process",
+  accepted: "process",
+  withdrawn: "rejected",
   rejected: "rejected",
 };
 
@@ -47,6 +52,7 @@ const STAGE_RANK: Record<string, number> = {
   assessment: 1,
   interview: 2,
   offer: 3,
+  accepted: 4,
 };
 
 export const stageRank = (status: string): number =>
@@ -57,6 +63,8 @@ const STAGE_LABELS: Record<string, string> = {
   assessment: "assessment",
   interview: "interview",
   offer: "offer",
+  accepted: "accepted",
+  withdrawn: "withdrawn",
 };
 
 export const stageLabel = (status: string): string =>

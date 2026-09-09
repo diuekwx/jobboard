@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { API_BASE_URL } from "../api/api";
+import { apiFetch } from "../api/api";
 
 interface DateInputProps {
   onDateChange: (date: string) => void;
@@ -14,10 +14,7 @@ const DateInput: React.FC<DateInputProps> = ({ onDateChange }) => {
 
   useEffect(() => {
     const getDate = async () => {
-      const response = await fetch(`${API_BASE_URL}/sync/start_date`, {
-        method: "GET",
-        credentials: "include",
-      });
+      const response = await apiFetch("/sync/start_date");
 
       const data: DateResponse = await response.json();
       if (data.date !== null) {

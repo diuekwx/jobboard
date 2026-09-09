@@ -35,12 +35,13 @@ KIND_CONFIRMATION = "confirmation"  # "we received your application"
 KIND_REJECTION = "rejection"        # "we're moving forward with other candidates"
 KIND_ASSESSMENT = "assessment"      # "please complete this online assessment"
 KIND_INTERVIEW = "interview"        # "let's schedule an interview" / "you're booked for"
-KIND_OTHER = "other"                # anything else: alerts, offers, noise
+KIND_OFFER = "offer"                # an employer extends an offer of employment
+KIND_OTHER = "other"                # anything else: alerts, newsletters, noise
 
-KINDS = (KIND_CONFIRMATION, KIND_REJECTION, KIND_ASSESSMENT, KIND_INTERVIEW, KIND_OTHER)
+KINDS = (KIND_CONFIRMATION, KIND_REJECTION, KIND_ASSESSMENT, KIND_INTERVIEW, KIND_OFFER, KIND_OTHER)
 
 # The two kinds that move a live application into "In Process", best stage last.
-ADVANCING_KINDS = (KIND_ASSESSMENT, KIND_INTERVIEW)
+ADVANCING_KINDS = (KIND_ASSESSMENT, KIND_INTERVIEW, KIND_OFFER)
 
 # ---------------------------------------------------------------------------
 # Rule layer
@@ -231,6 +232,13 @@ _INTERVIEW_PATTERNS = [
     r"spark-?hire|willo\.video|myinterview)",
     r"speak with (?:the|our) (?:hiring manager|recruiter|team)",
     r"recruiter (?:screen|call|chat)",
+]
+
+_OFFER_PATTERNS = [
+    r"(?:pleased|delighted|excited|happy) to (?:extend|make|present) (?:you )?(?:an?|the) offer",
+    r"(?:formal |written |employment |job )offer (?:for|from|letter|details)",
+    r"offer of employment",
+    r"we (?:would like|want) to offer you (?:the|a) (?:position|role|job)",
 ]
 
 # Process descriptions and conditional promises read exactly like invitations
@@ -551,6 +559,11 @@ def run_rules(from_header: str, subject: str, body: str) -> RuleResult:
         confidence = "high" if (strong_rej and company and conf == "high") else "low"
         return RuleResult(KIND_REJECTION, company, role, confidence)
 
+    offer_hits = _unhedged_hits(_haystack(subject, body), _OFFER_PATTERNS)
+    if offer_hits:
+        confidence = "high" if offer_hits >= 2 and company and conf == "high" else "low"
+        return RuleResult(KIND_OFFER, company, role, confidence)
+
     # Next-stage mail also opens with thanks ("Thanks for applying - the next
     # step is a short assessment"), so it is settled before confirmation too.
     interview_hits, assessment_hits = _stage_scan(subject, body)
@@ -632,7 +645,7 @@ _BATCH_JSON_SCHEMA = {
                         "type": "string",
                         "enum": [
                             "confirmation", "rejection", "assessment",
-                            "interview", "other",
+                            "interview", "offer", "other",
                         ],
                     },
                     "company": {"type": "string", "maxLength": MAX_COMPANY_LENGTH},
@@ -680,8 +693,9 @@ _LLM_SYSTEM = (
     "coding challenge or work sample as part of their application.\n"
     "- \"interview\": the recipient is invited to interview, asked for their "
     "availability or to book a slot, or told an interview is scheduled.\n"
+    "- \"offer\": the employer extends a job offer or sends a formal offer letter.\n"
     "- \"other\": anything else, including job alerts and newsletters, recruiter "
-    "cold outreach, and offers.\n\n"
+    "cold outreach.\n\n"
     "A rejection usually opens with polite confirmation wording (\"Thank you for "
     "your interest in Acme\") - if the email declines the candidate anywhere in "
     "the text the category is \"rejection\", never \"confirmation\".\n\n"
@@ -715,9 +729,9 @@ class EmailClassification(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     category: Literal[
-        "confirmation", "rejection", "assessment", "interview", "other"
+        "confirmation", "rejection", "assessment", "interview", "offer", "other"
     ] = Field(
-        description='One of "confirmation", "rejection", "assessment", "interview", "other".'
+        description='One of "confirmation", "rejection", "assessment", "interview", "offer", "other".'
     )
     company: str = Field(max_length=MAX_COMPANY_LENGTH,
         description="Employer the recipient applied to (never the ATS vendor). Empty string if unknown."
@@ -761,7 +775,7 @@ class ClassificationResult(BaseModel):
 
     message_id: str = Field(min_length=1, max_length=MAX_MESSAGE_ID_LENGTH)
     category: Literal[
-        "confirmation", "rejection", "assessment", "interview", "other"
+        "confirmation", "rejection", "assessment", "interview", "offer", "other"
     ]
     company: Optional[str] = Field(default=None, max_length=MAX_COMPANY_LENGTH)
     role: Optional[str] = Field(default=None, max_length=MAX_ROLE_LENGTH)
@@ -950,6 +964,8 @@ def _coerce_category(d: dict) -> str:
         return KIND_REJECTION
     if raw.startswith(("interview", "screen")) or raw in ("phone screen", "scheduling"):
         return KIND_INTERVIEW
+    if raw.startswith("offer") or raw in ("job offer", "employment offer"):
+        return KIND_OFFER
     if raw.startswith(("assessment", "test", "challenge", "take")) or raw in (
         "coding challenge", "take home", "online assessment", "oa",
     ):
@@ -1055,7 +1071,7 @@ def classify_with_llm(
         )
         + "\n"
         'Respond with JSON: {"category": '
-        '"confirmation"|"rejection"|"assessment"|"interview"|"other", '
+        '"confirmation"|"rejection"|"assessment"|"interview"|"offer"|"other", '
         '"company": "...", "role": "...", "confidence": "high"|"medium"|"low", '
         '"when": "<ISO 8601 UTC or empty>"}. '
         'Use "" for company, role or when if unknown.'
@@ -1167,7 +1183,7 @@ def _with_schedule(
     timestamp; the model's answer is a fallback for wording the patterns miss,
     and is discarded unless it lands in the same plausible window.
     """
-    if not decision.is_advance:
+    if decision.kind not in (KIND_ASSESSMENT, KIND_INTERVIEW):
         return decision
     anchor = received_at or datetime.now(timezone.utc)
     when = schedule_parser.parse_when(subject, body, received_at=anchor)
@@ -1309,7 +1325,7 @@ def _classify_chunk_llm_detailed(
         + json.dumps(payload, ensure_ascii=False)
         + "\n"
         'Respond with JSON: {"results": [{"message_id": "<exact input id>", '
-        '"category": "confirmation"|"rejection"|"assessment"|"interview"|"other", '
+        '"category": "confirmation"|"rejection"|"assessment"|"interview"|"offer"|"other", '
         '"company": "...", "role": "...", "confidence": "high"|"medium"|"low", '
         '"when": "<ISO 8601 UTC or empty>"}, ...]} - exactly one object per email, '
         "with every input message_id copied exactly once. Use \"\" for company, "

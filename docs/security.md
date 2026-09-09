@@ -94,6 +94,7 @@ contents, or usable Gmail credentials.
 | applications | status | Medium | Plaintext metadata initially | Needed for board filtering and workflow |
 | applications | source | Low | Plaintext | Operational metadata |
 | applications | needs_review | Low | Plaintext | Operational flag |
+| applications | archived_at | Low | Plaintext | Needed to hide/restore archived records |
 | applications | gmail_message_id | Medium | Prefer keyed blind index; retain encrypted value if permalink is required | Used for deduplication and Gmail links |
 | applications | gmail_thread_id | Medium | Prefer keyed blind index plus encrypted value | Used for thread matching |
 | integration_tokens | access_token | Critical | Encrypt | Grants temporary Gmail access |
@@ -114,6 +115,8 @@ contents, or usable Gmail credentials.
 | processed_messages | gmail_thread_id | Medium | Keyed blind index if retained | Used for matching |
 | processed_messages | outcome | Low | Plaintext machine-readable code | Operational state |
 | processed_messages | detail | Low | Plaintext machine-readable reason code | Email subjects were removed and historical details cleared |
+| application_actions | summary | High | Encrypt | May describe a private correction or employer |
+| application_actions | undo_payload | High | Encrypt | Contains prior protected application values |
 
 ## Implemented storage design
 
@@ -135,6 +138,8 @@ such as `rules`, `llm`, or `rules+llm`.
 The following remain plaintext metadata: user email,
 application status/date/source/review flag, event type/timestamps, provider,
 token expiration, processing outcome/timestamps, row IDs, and relationships.
+Action type/timestamps and application archival timestamps are also plaintext;
+action summaries and undo snapshots are encrypted.
 
 ## Key storage and recovery
 
@@ -158,3 +163,33 @@ recoverable. Rotate immediately after suspected disclosure.
 The current runtime accepts one active key, so rotation must be performed as a
 planned migration rather than by replacing the environment value in place.
 Changing the key without re-encrypting data makes existing records unreadable.
+
+## Authentication and account lifecycle
+
+Google is the only sign-in path. OAuth state is stored in a signed, ten-minute,
+HttpOnly session cookie, consumed before the callback exchanges its code, and
+never logged. Application sessions are signed, audience- and issuer-bound JWTs
+in HttpOnly `SameSite=Lax` cookies. Production startup requires HTTPS cookies,
+HTTPS origins and redirects, separate strong signing/session secrets, and Google
+client credentials.
+
+Every cookie-authenticated mutation requires a random CSRF value that is bound
+to the signed session and supplied in both a readable cookie and the
+`X-CSRF-Token` header. Cross-origin mutation requests are rejected. OAuth and
+mutation endpoints have bounded, process-local request limits. This matches the
+initial single-process deployment; use a shared limiter before horizontal scale.
+
+Logout removes local session cookies. Gmail disconnect and account deletion make
+a best-effort Google revocation request, then remove the local encrypted token
+even if Google is unavailable. Reconnection runs a fresh consent flow. Account
+deletion immediately removes applications, events, recruiter responses,
+processed-message records, scan jobs, sync settings, integration credentials,
+and the user from the active database.
+
+Encrypted disaster-recovery backups may retain a deleted account until their
+scheduled expiry, for no more than 30 days. Backups are not edited in place and
+must not be used for analytics or ordinary account recovery. A disaster restore
+must replay account deletions requested after the restored snapshot before the
+service is reopened. This operational deletion ledger must contain only the
+minimum user identifier and deletion time and must be access-controlled
+separately from application data.

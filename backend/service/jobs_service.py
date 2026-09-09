@@ -12,8 +12,10 @@ from backend.models.db_event import Event
 from backend.models.db_response import RecruiterResponse
 from backend.models.schema import EditApplication, ApplicationCreate
 from backend.security.encryption import blind_index
+from backend.service.workflow_service import record_action, snapshot
 
 REJECTED_STATUS = "rejected"
+CLOSED_STATUSES = (REJECTED_STATUS, "accepted", "withdrawn")
 ASSESSMENT_STATUS = "assessment"
 INTERVIEW_STATUS = "interview"
 
@@ -35,12 +37,14 @@ OPEN_STATUSES = tuple(STAGE_RANK)
 
 # The stage an application lands in when a next-step e-mail arrives, keyed by
 # the classifier's kind (which is deliberately the same string as the status).
-STAGE_STATUSES = (ASSESSMENT_STATUS, INTERVIEW_STATUS)
+STAGE_STATUSES = (ASSESSMENT_STATUS, INTERVIEW_STATUS, "offer")
 
 
 def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate):
     existing_job = next((
-        app for app in db.query(Application).filter(Application.user_id == user_id)
+        app for app in db.query(Application).filter(
+            Application.user_id == user_id, Application.archived_at.is_(None)
+        )
         if app.company_name == data.company and app.position == data.position
     ), None)
     if existing_job:
@@ -51,10 +55,13 @@ def create_job_service(db: Session, user_id: uuid.UUID, data: ApplicationCreate)
         company_name=data.company,
         position=data.position,
         status=data.status,
+        notes=data.notes,
         application_date=_aware(data.time).astimezone(timezone.utc).date() if data.time else datetime.now(timezone.utc).date(),
         source="manual",
     )
     db.add(new_job)
+    db.flush()
+    record_action(db, user_id, new_job.id, "created", "Application added manually")
     db.commit()
     db.refresh(new_job)
     return new_job
@@ -65,6 +72,7 @@ def get_application_by_thread(db: Session, user_id: uuid.UUID, thread_id: str | 
         return None
     return db.query(Application).filter(
         Application.user_id == user_id,
+        Application.archived_at.is_(None),
         Application.gmail_thread_lookup == blind_index(
             thread_id, context="applications.gmail_thread_id"
         ),
@@ -210,7 +218,9 @@ def match_application_for_email(
         return ApplicationMatch(None)
 
     candidates = [
-        app for app in db.query(Application).filter(Application.user_id == user_id)
+        app for app in db.query(Application).filter(
+            Application.user_id == user_id, Application.archived_at.is_(None)
+        )
         if normalize_company(app.company_name) == key
         and not (open_only and app.status not in OPEN_STATUSES)
     ]
@@ -261,7 +271,7 @@ def mark_application_rejected(
         received_at=received_at,
     ))
 
-    if app.status == REJECTED_STATUS:
+    if app.status in CLOSED_STATUSES:
         return False
 
     app.status = REJECTED_STATUS
@@ -374,7 +384,7 @@ def advance_application(
             source_message_id=source_message_id,
         )
 
-    if app.status == REJECTED_STATUS or _stage_rank(stage) <= _stage_rank(app.status):
+    if app.status in CLOSED_STATUSES or _stage_rank(stage) <= _stage_rank(app.status):
         return False
 
     app.status = stage
@@ -434,27 +444,42 @@ def rejected_at_map(db: Session, user_id: uuid.UUID) -> dict[uuid.UUID, datetime
     return {app_id: received for app_id, received in rows}
 
 
-def update_job_application(db: Session, app_id: uuid.UUID, data: EditApplication, user_id: uuid.UUID):
+def update_job_application(
+    db: Session, app_id: uuid.UUID, data: EditApplication, user_id: uuid.UUID,
+    *, resolve_review: bool = False,
+):
     app = db.query(Application).filter(
         Application.id == app_id, Application.user_id == user_id
     ).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
+    before = snapshot(app)
     updates = data.model_dump(exclude_unset=True)
     if "company" in updates:  # schema field -> column name
         updates["company_name"] = updates.pop("company")
     for key, value in updates.items():
         if hasattr(app, key):
             setattr(app, key, value)
+    if resolve_review:
+        app.needs_review = False
+    app.updated_at = datetime.now(timezone.utc)
+    record_action(
+        db, user_id, app.id, "correction" if resolve_review else "edit",
+        "Review corrected" if resolve_review else "Application edited",
+        {"kind": "snapshot", "application_id": str(app.id), "before": before},
+    )
 
     db.commit()
     db.refresh(app)
     return app
 
 
-def list_jobs(db: Session, user_id: uuid.UUID):
-    jobs = db.query(Application).filter(Application.user_id == user_id).all()
+def list_jobs(db: Session, user_id: uuid.UUID, *, archived: bool = False):
+    jobs = db.query(Application).filter(
+        Application.user_id == user_id,
+        Application.archived_at.is_not(None) if archived else Application.archived_at.is_(None),
+    ).all()
     responded = rejected_at_map(db, user_id)
     events = events_map(db, user_id)
     now = datetime.now(timezone.utc)
@@ -469,6 +494,12 @@ def list_jobs(db: Session, user_id: uuid.UUID):
             "status": job.status,
             "source": job.source,
             "needs_review": job.needs_review,
+            "notes": job.notes,
+            "archived_at": job.archived_at.isoformat() if job.archived_at else None,
+            "outcome_at": (
+                _aware(job.updated_at).isoformat()
+                if job.status in ("accepted", "withdrawn", "rejected") else None
+            ),
             "next_event": _next_event(events.get(job.id, []), now),
             "rejected_at": (
                 _aware(replied_at).isoformat()

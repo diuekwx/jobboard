@@ -39,7 +39,8 @@ user/provider tokens, and duplicate application/source-message events before
 changing any data. Resolve those conflicts deliberately on the restored copy;
 no automatic row deletion or token selection is performed. It maps `sent` to
 `applied`. Supported statuses are `applied`, `process`, `assessment`, `interview`,
-`offer`, and `rejected`; additional outcomes remain milestone 8 work.
+`offer`, `accepted`, `withdrawn`, and `rejected`. Revision 0008 also adds
+application archival timestamps and encrypted reversible action history.
 
 Legacy timestamps without offsets are interpreted as UTC. PostgreSQL conversion
 uses an explicit `AT TIME ZONE 'UTC'`, independent of the database session timezone.
