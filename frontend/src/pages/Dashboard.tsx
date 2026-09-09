@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import KanbanBoard from "../components/Kanban";
 import { API_BASE_URL } from "../api/api";
 import DateInput from "../components/DateInput";
@@ -9,17 +9,30 @@ interface APIResponse {
   applications: Application[];
 }
 
+interface ScanJob {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  phase: string;
+  progress: {
+    discovered: number;
+    fetched: number;
+    classified: number;
+    applied: number;
+    deferred: number;
+    failed: number;
+  };
+  message?: string | null;
+  error?: string | null;
+}
+
 const Dashboard = () => {
   const [startDate, setStartDate] = useState("");
   const [apps, setApps] = useState<Application[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [scan, setScan] = useState<ScanJob | null>(null);
   const [note, setNote] = useState("");
+  const appliedRef = useRef(0);
 
-  useEffect(() => {
-    listAllJobs();
-  }, []);
-
-  const listAllJobs = async () => {
+  const listAllJobs = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/job/list`, {
         method: "GET",
@@ -32,34 +45,85 @@ const Dashboard = () => {
       console.error("Error fetching jobs:", error);
       setApps([]);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void listAllJobs();
+    const resumeScan = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/gmail-service/scans/current`, {
+          credentials: "include",
+        });
+        if (response.ok) {
+          const current: ScanJob | null = await response.json();
+          setScan(current);
+          appliedRef.current = current?.progress.applied ?? 0;
+          if (current?.message) setNote(current.message);
+        }
+      } catch (error) {
+        console.error("Error fetching scan status:", error);
+      }
+    };
+    void resumeScan();
+  }, [listAllJobs]);
+
+  const scanning = scan?.status === "queued" || scan?.status === "running";
+  const scanId = scan?.id;
+
+  useEffect(() => {
+    if (!scanning || !scanId) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/gmail-service/scans/${scanId}`,
+          { credentials: "include" }
+        );
+        if (!response.ok || cancelled) return;
+        const next: ScanJob = await response.json();
+        if (next.progress.applied > appliedRef.current) {
+          appliedRef.current = next.progress.applied;
+          void listAllJobs();
+        }
+        setScan(next);
+        if (next.message) setNote(next.message);
+        if (next.status === "completed" || next.status === "failed") {
+          void listAllJobs();
+        }
+      } catch (error) {
+        console.error("Error polling scan status:", error);
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1250);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [listAllJobs, scanId, scanning]);
 
   const refresh = async () => {
-    setLoading(true);
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/gmail-service/fetch-applications`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/gmail-service/scans`, {
+        method: "POST",
+        credentials: "include",
+      });
 
       if (!response.ok) {
-        console.error("Something went wrong");
-        setNote("scan failed — try again");
+        const problem = await response.json().catch(() => null);
+        setNote(problem?.detail ?? "scan failed — try again");
         return;
       }
 
-      const data: APIResponse = await response.json();
-      setApps(data?.applications ?? []);
-      setNote(data?.message ?? "");
+      const data: ScanJob = await response.json();
+      setScan(data);
+      appliedRef.current = data.progress.applied;
+      setNote(data.message ?? "scan queued");
     } catch (error) {
       console.error("Error fetching applications:", error);
       setNote("scan failed — try again");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -190,11 +254,11 @@ const Dashboard = () => {
           <button
             className="btn btn--solid"
             onClick={refresh}
-            disabled={loading}
+            disabled={scanning}
           >
-            {loading ? "Refreshing" : "Refresh"}
+            {scanning ? "Scanning" : "Refresh"}
           </button>
-          <button className="btn" onClick={dateset} disabled={loading}>
+          <button className="btn" onClick={dateset} disabled={scanning}>
             Sync by date
           </button>
           <span className="mono" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
@@ -208,11 +272,13 @@ const Dashboard = () => {
           <span className="eyebrow">Pipeline</span>
           {note && (
             <span className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-              {note}
+              {scanning && scan
+                ? `${scan.phase} · ${scan.progress.applied}/${scan.progress.discovered}`
+                : note}
             </span>
           )}
         </div>
-        <KanbanBoard apps={apps} loading={loading} />
+        <KanbanBoard apps={apps} />
       </section>
     </div>
   );

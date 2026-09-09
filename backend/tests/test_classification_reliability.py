@@ -183,6 +183,8 @@ def test_timeout_retry_usage_and_elapsed_are_accounted(monkeypatch):
     assert run.metrics.total_tokens == 25
     assert run.metrics.elapsed_ms >= 0
     assert client.completions_stub.calls[0]["timeout"] == classifier.CLASSIFIER_TIMEOUT_SECONDS
+    assert client.completions_stub.calls[0]["response_format"]["type"] == "json_schema"
+    assert client.completions_stub.calls[0]["extra_body"] == {"think": False}
 
 
 def test_excerpt_removes_quoted_history_and_footer_but_keeps_evidence():

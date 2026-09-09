@@ -19,7 +19,8 @@ _ATS_FROM = " OR ".join([
     # application into "In Process" usually comes from one of these, not the
     # employer's own domain
     "hackerrank.com", "hackerrankforwork.com", "codility.com", "codesignal.com",
-    "coderbyte.com", "hackerearth.com", "devskiller.com", "testgorilla.com",
+    "coderbyte.com", "coderpad.io", "coderpad.com", "hackerearth.com",
+    "devskiller.com", "testgorilla.com",
     "karat.com", "byteboard.dev", "woven.teams", "qualified.io",
     "hirevue.com", "sparkhire.com", "willo.video", "pymetrics.com",
     "calendly.com", "goodtime.io", "modernloop.io", "chilipiper.com",

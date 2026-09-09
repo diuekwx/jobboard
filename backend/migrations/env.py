@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, pool
 from backend.db.base_class import Base
 from backend.models import (  # noqa: F401
     db_users, db_application, db_applicationsync, db_response,
-    db_event, db_integrationtokens, db_processedmessage,
+    db_event, db_integrationtokens, db_processedmessage, db_scanjob,
 )
 
 

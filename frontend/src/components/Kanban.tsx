@@ -28,17 +28,24 @@ type PaneProps = {
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 const FAR_FUTURE = 8.64e15; // sorts undated entries last
+const FAR_PAST = -8.64e15; // sorts undated entries last in newest-first panes
 
 /**
  * In Process is the pane with a clock on it, so it leads with whatever is due
  * soonest. An entry with no date sits below the dated ones, furthest-along
- * stage first. The other panes keep the order the backend sent.
+ * stage first. Sent and Rejected are application logs, newest first.
  */
 const orderFor = (
   status: ApplicationStatus,
   entries: Application[]
 ): Application[] => {
-  if (status !== "process") return entries;
+  if (status !== "process") {
+    const appliedAt = (entry: Application) => {
+      const parsed = new Date(entry.date).getTime();
+      return Number.isNaN(parsed) ? FAR_PAST : parsed;
+    };
+    return [...entries].sort((a, b) => appliedAt(b) - appliedAt(a));
+  }
   const dueAt = (a: Application) => {
     const at = a.next_event?.at;
     const parsed = at ? new Date(at).getTime() : NaN;

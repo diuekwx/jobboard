@@ -77,6 +77,10 @@ event details, and recruiter headers. It also replaces plaintext Gmail-ID
 indexes with keyed lookup indexes. The migration is forward-only; recovery
 requires both the pre-migration backup and its matching application version.
 
+Revision `0007_background_scan_jobs` adds the durable Gmail scan queue. Apply
+it before starting `backend.scan_worker`; the worker does not create tables at
+runtime. Existing application and Gmail ledger rows are unchanged.
+
 These initial revisions are forward-only. Recover by restoring the backup and
 the matching application version. `backend.create_tables` now delegates to
 Alembic; it no longer drops tables or bypasses migrations.

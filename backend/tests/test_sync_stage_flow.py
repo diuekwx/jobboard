@@ -155,6 +155,28 @@ def test_an_invite_with_nothing_tracked_stands_a_row_up(db, connected, stub_gmai
     assert db.query(Event).count() == 1
 
 
+def test_a_submitted_assessment_receipt_is_created_in_process(
+    db, connected, stub_gmail
+):
+    stub_gmail([_message(
+        "m1", "t1", "Coderbyte <do-not-reply@coderbyte.com>",
+        "Assessment submitted for Clerkie",
+        (
+            "This is your confirmation email letting you know that you have "
+            "successfully submitted your answers for the Clerkie assessment."
+        ),
+        MAR,
+    )])
+
+    result = sync(db, connected)
+
+    assert result["created"] == []
+    assert result["advanced"][0]["company"] == "Clerkie"
+    app = db.query(Application).one()
+    assert app.company_name == "Clerkie"
+    assert app.status == ASSESSMENT_STATUS
+
+
 def test_an_unmatched_invite_is_dropped_when_creation_is_disabled(
     db, connected, stub_gmail, monkeypatch
 ):

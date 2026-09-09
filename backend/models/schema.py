@@ -3,10 +3,6 @@ from uuid import UUID
 from typing import Optional, Literal
 from datetime import datetime
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-
 class UserOut(BaseModel):
     id: UUID
     email: EmailStr

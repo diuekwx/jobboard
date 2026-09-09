@@ -1,6 +1,9 @@
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -31,17 +34,23 @@ from backend.service.jobs_service import (
 from backend.service.oauth_service import refresh_google_token
 from backend.security.encryption import blind_index
 from backend.service.sync_service import get_or_create_sync, mark_synced, search_after_datetime
+from backend.service.scan_job_service import renew_scan_lease
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["gmail"])
 
-MAX_MESSAGES_PER_SYNC = int(os.getenv("GMAIL_MAX_MESSAGES", "200"))
+MAX_MESSAGES_PER_SYNC = max(1, int(os.getenv("GMAIL_MAX_MESSAGES", "200")))
 # Cap LLM classification calls per sync so one big run can't blow the provider's
 # rate limit. Overflow is deferred (nothing persisted) and picked up next sync.
 LLM_BUDGET_PER_SYNC = int(os.getenv("GMAIL_LLM_BUDGET_PER_SYNC", "40"))
 # Messages processed + committed per checkpoint (keep it a multiple of the
 # classifier batch size so each chunk maps to one LLM request).
-_CHUNK = int(os.getenv("GMAIL_SYNC_CHUNK", "10"))
+_CHUNK = max(1, int(os.getenv("GMAIL_SYNC_CHUNK", "10")))
+GMAIL_FETCH_CONCURRENCY = max(1, int(os.getenv("GMAIL_FETCH_CONCURRENCY", "4")))
+# The supported deployment starts one scan worker, but the guard also prevents
+# accidental concurrent inference inside that process.
+_INFERENCE_SLOT = threading.BoundedSemaphore(1)
+_FETCH_LOCAL = threading.local()
 # A rejection for a company with no tracked application usually means the
 # application predates the scan window. Recording it (flagged for review) is
 # more useful than dropping it; set to 0 to only ever update existing rows.
@@ -118,17 +127,39 @@ def _list_candidate_ids(
             return ids, True
 
 
-@router.get("/fetch-applications")
-def fetch_job_applications(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    sync_row = get_or_create_sync(db, current_user.id)
+def _job_progress(db: Session, job, *, phase: str, message: str | None = None, **counts):
+    if job is None:
+        return
+    job.phase = phase
+    if message is not None:
+        job.message = message
+    for name, value in counts.items():
+        setattr(job, f"{name}_count", value)
+    renew_scan_lease(job)
+    db.commit()
+
+
+def _fetch_message(token_snapshot, message_id: str):
+    # google-api-python-client transports are not thread-safe. Each task gets
+    # a service/transport local to its pool thread while sharing only immutable
+    # token strings. A pool lives for one bounded scan slice.
+    service = getattr(_FETCH_LOCAL, "service", None)
+    if service is None:
+        service = _build_gmail(token_snapshot)
+        _FETCH_LOCAL.service = service
+    return service.users().messages().get(
+        userId="me", id=message_id, format="full"
+    ).execute()
+
+
+def run_gmail_scan(db: Session, user_id, *, scan_job=None):
+    """Execute one durable scan. The caller owns job completion/failure state."""
+    sync_row = get_or_create_sync(db, user_id)
     checkpoint_at = datetime.now(timezone.utc)
     after_epoch = int(search_after_datetime(sync_row).timestamp())
 
     token = db.query(IntegrationToken).filter(
-        IntegrationToken.user_id == current_user.id,
+        IntegrationToken.user_id == user_id,
         IntegrationToken.provider == "gmail",
     ).first()
     if not token:
@@ -137,7 +168,7 @@ def fetch_job_applications(
     try:
         token = refresh_google_token(db, token)
     except RefreshError:
-        logger.warning("Gmail token refresh failed for user %s", current_user.id)
+        logger.warning("Gmail token refresh failed for user %s", user_id)
         return {
             "error": "reconnect_gmail",
             "message": "Gmail authorization expired — please reconnect your account.",
@@ -148,7 +179,7 @@ def fetch_job_applications(
         service,
         build_query(after_epoch),
         db,
-        current_user.id,
+        user_id,
     )
 
     summary = {"created": [], "rejected": [], "advanced": [], "needs_review": 0,
@@ -175,19 +206,62 @@ def fetch_job_applications(
         },
     }
 
+    _job_progress(
+        db,
+        scan_job,
+        phase="fetching",
+        message=f"Found {len(candidate_ids)} message(s); fetching details.",
+        discovered=max(
+            getattr(scan_job, "discovered_count", 0),
+            getattr(scan_job, "applied_count", 0) + len(candidate_ids),
+        ),
+        failed=0,
+    )
+
     if not candidate_ids:
         if scan_complete:
-            mark_synced(db, current_user.id, checkpoint_at)
-        return {"message": "No new job application emails found.", "applications": list_jobs(db, current_user.id), "classification": classification, **summary}
+            mark_synced(db, user_id, checkpoint_at)
+        return {"message": "No new job application emails found.", "applications": list_jobs(db, user_id), "classification": classification, "scan_complete": scan_complete, **summary}
 
     # --- phase 1: fetch + extract every candidate message ---
     records = []  # (mid, from, subject, thread_id, body, received)
+    token_snapshot = SimpleNamespace(
+        access_token=token.access_token,
+        refresh_token=token.refresh_token,
+    )
+    fetched = {}
+    with ThreadPoolExecutor(max_workers=GMAIL_FETCH_CONCURRENCY) as pool:
+        futures = {
+            pool.submit(_fetch_message, token_snapshot, mid): mid
+            for mid in candidate_ids
+        }
+        for completed_index, future in enumerate(as_completed(futures), start=1):
+            mid = futures[future]
+            try:
+                fetched[mid] = future.result()
+            except Exception:
+                logger.exception("failed to fetch a Gmail message")
+                summary["failed"] += 1
+            if completed_index % _CHUNK == 0 or completed_index == len(futures):
+                _job_progress(
+                    db,
+                    scan_job,
+                    phase="fetching",
+                    message=(
+                        f"Fetched {len(fetched)} of {len(candidate_ids)} message(s)."
+                    ),
+                    fetched=max(
+                        getattr(scan_job, "fetched_count", 0),
+                        getattr(scan_job, "applied_count", 0) + len(fetched),
+                    ),
+                    failed=summary["failed"],
+                )
+
+    # Iterate candidate order for deterministic extraction; the records are
+    # then sorted by received time before any database effects are applied.
     for mid in candidate_ids:
-        try:
-            full = service.users().messages().get(userId="me", id=mid, format="full").execute()
-        except Exception:
-            logger.exception("failed to fetch a Gmail message")
-            summary["failed"] += 1
+        full = fetched.get(mid)
+        if full is None:
             continue
 
         payload = full.get("payload", {}) or {}
@@ -207,6 +281,17 @@ def fetch_job_applications(
         ))
 
     records.sort(key=lambda record: (record[5], record[0]))
+    _job_progress(
+        db,
+        scan_job,
+        phase="classifying",
+        message=f"Fetched {len(records)} message(s); classifying in bounded batches.",
+        fetched=max(
+            getattr(scan_job, "fetched_count", 0),
+            getattr(scan_job, "applied_count", 0) + len(records),
+        ),
+        failed=summary["failed"],
+    )
 
     # --- phase 2+3: classify and apply in chunks, committing progress per chunk ---
     # so an interrupted/timed-out sync keeps what it finished and never re-sends
@@ -214,11 +299,12 @@ def fetch_job_applications(
     llm_used = 0
     for start in range(0, len(records), _CHUNK):
         chunk = records[start:start + _CHUNK]
-        decisions = classify_emails(
-            [EmailInput(mid, frm, subj, body, rec) for (mid, frm, subj, _t, body, rec) in chunk],
-            use_llm=LLM_BUDGET_PER_SYNC > 0,
-            llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
-        )
+        with _INFERENCE_SLOT:
+            decisions = classify_emails(
+                [EmailInput(mid, frm, subj, body, rec) for (mid, frm, subj, _t, body, rec) in chunk],
+                use_llm=LLM_BUDGET_PER_SYNC > 0,
+                llm_budget=max(0, LLM_BUDGET_PER_SYNC - llm_used),
+            )
         run_metrics = getattr(decisions, "metrics", None)
         if run_metrics is not None:
             values = run_metrics.as_dict()
@@ -239,7 +325,7 @@ def fetch_job_applications(
                 continue
 
             ledger = ProcessedMessage(
-                user_id=current_user.id,
+                user_id=user_id,
                 gmail_message_id=mid,
                 gmail_thread_id=thread_id,
                 gmail_message_lookup=blind_index(
@@ -262,7 +348,7 @@ def fetch_job_applications(
                 # a new requisition, not a reopening - open_only keeps the old
                 # outcome intact and sends this down the "create" path instead.
                 match = match_application_for_email(
-                    db, current_user.id,
+                    db, user_id,
                     thread_id=thread_id,
                     company=decision.company,
                     role=decision.role,
@@ -280,7 +366,7 @@ def fetch_job_applications(
                         continue
                     target = create_email_application(
                         db,
-                        current_user.id,
+                        user_id,
                         company=decision.company,
                         role=decision.role,
                         status="applied",
@@ -335,7 +421,7 @@ def fetch_job_applications(
 
             if decision.kind == KIND_REJECTION:
                 match = match_application_for_email(
-                    db, current_user.id,
+                    db, user_id,
                     thread_id=thread_id,
                     company=decision.company,
                     role=decision.role,
@@ -355,7 +441,7 @@ def fetch_job_applications(
                     # created open and closed below, on the one code path.
                     target = create_email_application(
                         db,
-                        current_user.id,
+                        user_id,
                         company=decision.company,
                         role=decision.role,
                         status="applied",
@@ -399,7 +485,7 @@ def fetch_job_applications(
                     summary["skipped"] += 1
                 continue
 
-            existing = get_application_by_thread(db, current_user.id, thread_id)
+            existing = get_application_by_thread(db, user_id, thread_id)
             if existing:
                 ledger.outcome = "duplicate_thread"
                 ledger.application_id = existing.id
@@ -410,7 +496,7 @@ def fetch_job_applications(
 
             app = create_email_application(
                 db,
-                current_user.id,
+                user_id,
                 company=decision.company,
                 role=decision.role,
                 status="applied",
@@ -435,7 +521,18 @@ def fetch_job_applications(
             if decision.needs_review:
                 summary["needs_review"] += 1
 
-        db.commit()  # checkpoint progress after every chunk
+        completed = sum(1 for decision in decisions.values() if decision.method != "deferred")
+        if scan_job is not None:
+            scan_job.classified_count += completed
+            scan_job.applied_count += completed
+            scan_job.deferred_count = summary["deferred"]
+            scan_job.failed_count = summary["failed"]
+            scan_job.phase = "applying"
+            scan_job.message = (
+                f"Applied {scan_job.applied_count} of {len(records)} fetched message(s)."
+            )
+            renew_scan_lease(scan_job)
+        db.commit()  # checkpoint application and job progress together
 
     # Only advance the watermark once nothing is left deferred, so a deferred
     # email older than the lookback window can't fall outside the next query.
@@ -457,7 +554,16 @@ def fetch_job_applications(
             f"Scanned {len(candidate_ids)} new email(s) — "
             + ", ".join(parts) + "."
         ),
-        "applications": list_jobs(db, current_user.id),
+        "applications": list_jobs(db, user_id),
         "classification": classification,
+        "scan_complete": scan_complete,
         **summary,
     }
+
+
+def fetch_job_applications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Compatibility callable for older tests; new scans start with POST /scans."""
+    return run_gmail_scan(db, current_user.id)

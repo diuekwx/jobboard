@@ -13,7 +13,7 @@ The application stores or processes:
 - Interview and assessment information.
 - Gmail message and thread identifiers.
 - Email bodies temporarily received during Gmail synchronization.
-- User email addresses and password hashes.
+- User email addresses and Google OAuth tokens.
 - Encryption keys and application-signing secrets.
 
 ### Threats this design addresses
@@ -87,7 +87,6 @@ contents, or usable Gmail credentials.
 | Table | Field | Sensitivity | Treatment | Reason |
 |---|---|---:|---|---|
 | users | email | High | Initially plaintext; restrict access and document | Used for login and exact lookup |
-| users | hashed_password | Critical | Continue password hashing; never decrypt | Passwords must not use reversible encryption |
 | applications | company_name | High | Encrypt; add blind index if exact lookup is needed | Reveals where the user applied |
 | applications | position | High | Encrypt; add blind index if exact lookup is needed | Reveals job-search details |
 | applications | notes | High | Encrypt | May contain personal or recruiter information |
@@ -133,7 +132,7 @@ Full recruiter email bodies are used temporarily during classification and are
 not retained. Processed-message details contain only classifier method codes
 such as `rules`, `llm`, or `rules+llm`.
 
-The following remain plaintext metadata: user email, password hash,
+The following remain plaintext metadata: user email,
 application status/date/source/review flag, event type/timestamps, provider,
 token expiration, processing outcome/timestamps, row IDs, and relationships.
 

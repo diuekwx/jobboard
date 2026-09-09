@@ -34,6 +34,7 @@ from backend.models import (  # noqa: E402,F401  (imported for table registratio
     db_event,
     db_integrationtokens,
     db_processedmessage,
+    db_scanjob,
 )
 from backend.models.db_users import User  # noqa: E402
 
@@ -51,7 +52,7 @@ def db():
 
 @pytest.fixture()
 def user_id(db):
-    user = User(id=uuid.uuid4(), email="applicant@example.com", hashed_password="x")
+    user = User(id=uuid.uuid4(), email="applicant@example.com")
     db.add(user)
     db.commit()
     return user.id

@@ -200,14 +200,6 @@ a {
 
 /* ---- Fields (underline inputs) --------------------------- */
 
-.fieldset {
-  display: block;
-}
-.fieldset .eyebrow {
-  display: block;
-  margin-bottom: 0.4rem;
-}
-
 .field {
   width: 100%;
   border: 0;
@@ -538,11 +530,6 @@ a {
   font-size: 0.72rem;
   color: var(--muted);
 }
-.ulink {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 /* ---- a11y helpers -------------------------------------- */
 
 .sr-only {

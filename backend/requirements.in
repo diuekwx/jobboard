@@ -4,7 +4,6 @@ sqlalchemy
 psycopg2-binary
 alembic
 python-jose[cryptography]
-passlib[bcrypt]
 python-multipart
 pydantic
 httpx
@@ -25,6 +24,4 @@ openai
 # Required by EmailStr and SessionMiddleware
 email-validator
 itsdangerous
-# passlib 1.7.4 compatibility
-bcrypt==4.0.1
 cryptography

@@ -103,7 +103,7 @@ def test_database_copy_is_recoverable_with_the_matching_key(tmp_path):
     engine = create_engine(f"sqlite:///{database_path}")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
-        user = User(email="recovery@example.com", hashed_password="x")
+        user = User(email="recovery@example.com")
         session.add(user)
         session.flush()
         session.add(Application(

@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from backend.models.schema import CredentialCreate, GoogleCreate
 from backend.core.dependencies import get_db
 from backend.service.oauth_service import save_credentials
-from backend.service.user_service import get_user_by_email, create_new_google, login_goolge
+from backend.service.user_service import get_user_by_email, create_new_google, login_google
 from googleapiclient.discovery import build 
 from backend.core.auth import create_access_token
 import uuid
@@ -111,7 +111,7 @@ def auth_google_callback(request: Request, code: str, state: str, db: Session = 
     save_credentials(db, sending)
     frontend_redirect = os.getenv("FRONTEND_REDIRECT")
 
-    jwt = login_goolge(user_email)
+    jwt = login_google(user_email)
     response = RedirectResponse(url=frontend_redirect)
     response.set_cookie(
         key="access_token",

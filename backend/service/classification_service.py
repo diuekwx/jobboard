@@ -56,6 +56,9 @@ GENERIC_MAIL_DOMAINS = {
 # never the employer. Matched against the full domain and its registered
 # (last-two-label) form.
 ATS_DOMAINS = {
+    # Job-network notifications describe applications to third-party employers;
+    # the platform itself must never be inferred as the employer.
+    "linkedin.com",
     "greenhouse.io", "greenhouse-mail.io", "us.greenhouse.io",
     "lever.co", "hire.lever.co", "jobs.lever.co",
     "myworkday.com", "workday.com", "myworkdayjobs.com", "myworkdaysite.com",
@@ -78,7 +81,8 @@ ATS_DOMAINS = {
 # comes from the vendor, so the sender domain says nothing about the employer.
 VENDOR_DOMAINS = {
     "hackerrank.com", "hackerrankforwork.com", "hackerearth.com",
-    "codility.com", "codesignal.com", "coderbyte.com", "codesubmit.io",
+    "codility.com", "codesignal.com", "coderbyte.com", "coderpad.io",
+    "coderpad.com", "codesubmit.io",
     "devskiller.com", "testgorilla.com", "imocha.io", "vervoe.com",
     "byteboard.dev", "woven.teams", "karat.com", "qualified.io",
     "hirevue.com", "spark-hire.com", "sparkhire.com", "willo.video",
@@ -89,6 +93,30 @@ VENDOR_DOMAINS = {
 }
 
 ATS_DOMAINS |= VENDOR_DOMAINS
+
+# Display names used by ATSs, assessment tools and schedulers.  Vendor mail
+# commonly arrives as simply ``CoderPad <noreply@coderpad.io>`` or as
+# ``Acme via Coderbyte``.  The domain guard above prevents domain-based
+# inference, but without a name guard the display name can still leak through
+# as the employer.
+_PLATFORM_NAMES = (
+    r"greenhouse|lever|workday|myworkday|ashby(?:hq)?|icims|smartrecruiters|"
+    r"workable|jobvite|taleo|successfactors|teamtailor|linkedin|"
+    r"hackerrank(?: for work)?|hackerearth|codility|codesignal|coderbyte|"
+    r"coderpad|codesubmit|devskiller|testgorilla|imocha|vervoe|byteboard|"
+    r"woven|karat|qualified(?:\.io)?|hirevue|spark[ -]?hire|willo|"
+    r"myinterview|pymetrics|plum|traitify|calendly|goodtime|modernloop|"
+    r"prelude|cronofy|chilipiper|savvycal|youcanbook"
+)
+_PLATFORM_ONLY = re.compile(
+    rf"^(?:{_PLATFORM_NAMES})(?:\.(?:com|io|co|ai|dev))?"
+    r"(?:,?\s+(?:inc\.?|llc|ltd\.?|company))?$",
+    re.I,
+)
+_PLATFORM_SUFFIX = re.compile(
+    rf"\s+(?:via|through|using|powered\s+by|@|[|/\-])\s*(?:{_PLATFORM_NAMES})\s*$",
+    re.I,
+)
 
 _CONFIRMATION_PATTERNS = [
     r"thank you for applying",
@@ -165,6 +193,12 @@ _REJECTION_WEAK_PATTERNS = [
 _ASSESSMENT_PATTERNS = [
     r"(?:online|coding|technical|skills?|written|pre-?employment|hiring) assessment",
     r"assessment (?:link|invitation|invite|test|round|stage)",
+    # Completion receipts are still assessment-stage mail. Without these,
+    # "Assessment submitted" falls through to the generic application
+    # confirmation rule because that rule also recognizes "submitted".
+    r"assessment (?:has been |was )?(?:successfully )?(?:submitted|completed)",
+    r"(?:successfully\s+)?submitted (?:your |the )?(?:answers?|responses?|results?) "
+    r"(?:for|to) (?:the |your )?.{0,80}\bassessment",
     r"take[- ]?home\s*(?:assignment|assessment|project|challenge|exercise|test|task)?",
     r"coding (?:challenge|exercise|test|task|assignment)",
     r"(?:complete|start|begin|take|finish|submit) (?:the|your|this|a|an) "
@@ -228,7 +262,7 @@ _GENERIC_NAME = re.compile(
     r"\b(?:no[-\s]?reply|noreply|donotreply|do[-\s]?not[-\s]?reply|recruit(?:ing|ment)?|"
     r"talent(?:\s+acquisition)?|careers?|jobs|hr|human\s+resources|hiring(?:\s+team)?|"
     r"notifications?|team|people\s+ops|peopleops|candidate|applicant|workday|greenhouse|"
-    r"lever|ashby|icims|smartrecruiters|workable)\b",
+    rf"lever|ashby|icims|smartrecruiters|workable|linkedin|{_PLATFORM_NAMES})\b",
     re.I,
 )
 
@@ -251,7 +285,26 @@ _COMPANY_PHRASE = re.compile(
     r"opportunity at|interest in(?: joining| working (?:at|for))?|interest in|joining)\s+"
     r"(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})",
 )
+_APPLICATION_SENT_TO = re.compile(
+    r"\b(?:your\s+)?application\s+(?:has\s+been\s+|was\s+)?sent\s+to\s+"
+    r"(?P<co>[A-Za-z0-9][\w&.\-]*(?:\s+[A-Za-z0-9][\w&.\-]*){0,3})\s*[!.]?\s*$",
+    re.I,
+)
+_COMPANY_INVITES_YOU = re.compile(
+    r"^\s*(?P<co>[A-Z0-9][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})\s+"
+    r"(?:has\s+)?invit(?:es|ed)\s+you\b"
+)
+_ASSESSMENT_SUBMITTED_FOR = re.compile(
+    r"\b[Aa]ssessment\s+(?:submitted|completed)\s+for\s+"
+    r"(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})\s*[!.]?\s*$"
+)
 _COMPANY_AT_END = re.compile(r"\bat\s+(?P<co>[A-Z][\w&.\-]*(?:\s+[A-Z0-9][\w&.\-]*){0,3})\s*[!.]?\s*$")
+
+
+def _is_platform_name(value: str | None) -> bool:
+    """Whether a purported company is only a recruiting/test platform name."""
+    normalized = re.sub(r"\s+", " ", value or "").strip(" .,-–—|·•")
+    return bool(normalized and _PLATFORM_ONLY.fullmatch(normalized))
 
 
 @dataclass
@@ -372,19 +425,22 @@ def _guess_company(name: str, domain: str, subject: str, body: str):
         if c:
             return c, "high"
 
-    # ATS platforms append " @ icims", " | Greenhouse", etc. to the sender name.
-    name = re.sub(
-        r"\s*[@|/]\s*(?:icims|greenhouse|lever|workday|myworkday|ashby|ashbyhq|"
-        r"smartrecruiters|workable|jobvite|taleo|successfactors|teamtailor)\s*$",
-        "", name or "", flags=re.I,
-    ).strip()
+    # Keep the employer portion of "Acme via CoderPad", while rejecting a
+    # display name that consists only of the platform.
+    name = _PLATFORM_SUFFIX.sub("", name or "").strip()
 
-    cleaned = _clean_name(name)
+    cleaned = None if _is_platform_name(name) else _clean_name(name)
     if cleaned:
         return cleaned, "low"
 
     for text in (subject or "", (body or "")[:1000]):
-        for rx in (_COMPANY_PHRASE, _COMPANY_AT_END):
+        for rx in (
+            _APPLICATION_SENT_TO,
+            _COMPANY_INVITES_YOU,
+            _ASSESSMENT_SUBMITTED_FOR,
+            _COMPANY_PHRASE,
+            _COMPANY_AT_END,
+        ):
             m = rx.search(text)
             if m:
                 co = re.sub(r"\s+", " ", m.group("co")).strip(" .-")
@@ -547,6 +603,12 @@ _IS_FREE = (
 )
 # qwen3 and other reasoning models emit <think>…</think>; ask them not to.
 _NO_THINK = "qwen3" in CLASSIFIER_MODEL.lower()
+_DISABLE_THINKING = os.getenv(
+    "CLASSIFIER_DISABLE_THINKING", "1" if _NO_THINK and _IS_LOCAL else "0"
+) not in ("", "0", "false", "False")
+_STRICT_STRUCTURED_OUTPUT = os.getenv(
+    "CLASSIFIER_STRICT_JSON", "1" if _IS_LOCAL else "0"
+) not in ("", "0", "false", "False")
 
 _llm_client = None
 _llm_disabled = False
@@ -556,6 +618,54 @@ MAX_COMPANY_LENGTH = 200
 MAX_ROLE_LENGTH = 200
 MAX_MESSAGE_ID_LENGTH = 255
 MAX_EXCERPT_LENGTH = int(os.getenv("CLASSIFIER_EXCERPT_LENGTH", "2500"))
+
+_BATCH_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "maxLength": MAX_MESSAGE_ID_LENGTH},
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "confirmation", "rejection", "assessment",
+                            "interview", "other",
+                        ],
+                    },
+                    "company": {"type": "string", "maxLength": MAX_COMPANY_LENGTH},
+                    "role": {"type": "string", "maxLength": MAX_ROLE_LENGTH},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                    "when": {"type": "string", "maxLength": 64},
+                },
+                "required": [
+                    "message_id", "category", "company", "role", "confidence", "when",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["results"],
+    "additionalProperties": False,
+}
+
+_RESPONSE_FORMAT = (
+    {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "email_classification_batch",
+            "strict": True,
+            "schema": _BATCH_JSON_SCHEMA,
+        },
+    }
+    if _STRICT_STRUCTURED_OUTPUT
+    else {"type": "json_object"}
+)
 
 _LLM_SYSTEM = (
     "You classify emails for a job-application tracker. You are given one email's "
@@ -624,6 +734,11 @@ class EmailClassification(BaseModel):
         description="Interview time or assessment deadline as an ISO 8601 UTC "
                     "timestamp. Empty string if the email names no date.",
     )
+
+    @field_validator("company")
+    @classmethod
+    def employer_must_not_be_platform(cls, value: str) -> str:
+        return "" if _is_platform_name(value) else value
 
     @field_validator("when")
     @classmethod
@@ -771,16 +886,20 @@ def _call_llm(
         if metrics is not None:
             metrics.attempted_requests += 1
         try:
+            local_options = (
+                {"extra_body": {"think": False}} if _DISABLE_THINKING else {}
+            )
             resp = client.chat.completions.create(
                 model=CLASSIFIER_MODEL,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user_content},
                 ],
-                response_format={"type": "json_object"},
+                response_format=_RESPONSE_FORMAT,
                 temperature=0.0,
                 max_tokens=max_tokens,
                 timeout=CLASSIFIER_TIMEOUT_SECONDS,
+                **local_options,
             )
             if metrics is not None:
                 usage = getattr(resp, "usage", None)
