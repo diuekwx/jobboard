@@ -1,57 +1,77 @@
-from fastapi import APIRouter, Depends, Request, Response, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
+
+from backend.core.auth import clear_auth_cookies
 from backend.core.dependencies import get_current_user
 from backend.db.session import get_db
+from backend.models.db_integrationtokens import IntegrationToken
 from backend.models.db_users import User
-from backend.service.user_service import register_user, login_user, decode_jwt
-from backend.models.schema import UserCreate, UserOut
-from fastapi.security import OAuth2PasswordRequestForm
-from jose import jwt, JWTError
+from backend.models.schema import UserOut
+from backend.service.oauth_service import revoke_google_credentials
+from backend.service.user_service import delete_user_account
 
 
 router = APIRouter(prefix="/user", tags=["User"])
 
-@router.post("/register", response_model=UserOut)
-def register(user: UserCreate, db: Session = Depends(get_db)):
-    return register_user(db, user.email, user.password)
 
-# respense -> auto http response fastapi will be sending  
-@router.post("/login")
-def login(user: UserCreate, db: Session = Depends(get_db)):
-    token = login_user(db, user.email, user.password)
-    response = JSONResponse(content={"message": "Login Success"})
+def _gmail_token(db: Session, user_id):
+    return db.query(IntegrationToken).filter(
+        IntegrationToken.user_id == user_id,
+        IntegrationToken.provider == "gmail",
+    ).first()
 
-    response.set_cookie(
-        key="access_token",
-        value = token,
-        httponly=True,
-        secure=False, #true 
-        samesite="lax" #None
-    )
-    return response
-
-# @router.post("/login")
-# def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-#     token = login_user(db, form_data.username, form_data.password)
-#     return {"access_token": token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserOut)
-def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+def read_users_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "gmail_connected": _gmail_token(db, current_user.id) is not None,
+    }
 
-@router.get("/ping")
-def get_me(request: Request):
-    token = request.cookies.get("access_token")
+
+@router.post("/logout", status_code=204)
+def logout(
+    request: Request,
+    response: Response,
+    _current_user: User = Depends(get_current_user),
+):
+    request.session.clear()
+    clear_auth_cookies(response)
+
+
+@router.post("/gmail/disconnect")
+def disconnect_gmail(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    token = _gmail_token(db, current_user.id)
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return {"disconnected": True, "provider_revoked": False}
 
-    try:
-        payload = decode_jwt(token)
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    revoked = revoke_google_credentials(token)
+    db.delete(token)
+    db.commit()
+    return {"disconnected": True, "provider_revoked": revoked}
 
-    return {"email": email}
+
+@router.delete("/me", status_code=204)
+def delete_account(
+    request: Request,
+    response: Response,
+    x_confirm_account_deletion: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if x_confirm_account_deletion != "delete":
+        raise HTTPException(status_code=400, detail="Account deletion confirmation is required")
+
+    token = _gmail_token(db, current_user.id)
+    if token:
+        revoke_google_credentials(token)
+    delete_user_account(db, current_user)
+    request.session.clear()
+    clear_auth_cookies(response)

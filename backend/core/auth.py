@@ -1,59 +1,64 @@
-from passlib.context import CryptContext
-from datetime import datetime, timedelta, timezone
-from jose import JWTError, jwt
-from sqlalchemy.orm import Session
-from dotenv import load_dotenv
-from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends, HTTPException, status
-from backend.models.db_users import User
-from backend.db.session import get_db
 import os
-from fastapi import HTTPException
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from dotenv import load_dotenv
 from jose import jwt
+
+from backend.core.config import cookie_secure
 
 
 load_dotenv()
 
 secret_key = os.getenv("SECRET_KEY")
-algorithm = os.getenv("ALGORITHM")
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/user/login")
-
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def hash_password(password: str):
-    return pwd_context.hash(password)
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+algorithm = os.getenv("ALGORITHM", "HS256")
+TOKEN_ISSUER = "job-api"
+TOKEN_AUDIENCE = "job-web"
 
 
-def create_access_token(data: dict, expires_delta: timedelta = None):
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=60))
-    to_encode.update({"exp": expire})
-    
+    now = datetime.now(timezone.utc)
+    minutes = int(os.getenv("AUTH_SESSION_MINUTES", "480"))
+    expire = now + (expires_delta or timedelta(minutes=minutes))
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "iss": TOKEN_ISSUER,
+        "aud": TOKEN_AUDIENCE,
+    })
     return jwt.encode(to_encode, secret_key, algorithm=algorithm)
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
+
+def decode_access_token(token: str):
+    return jwt.decode(
+        token,
+        secret_key,
+        algorithms=[algorithm],
+        audience=TOKEN_AUDIENCE,
+        issuer=TOKEN_ISSUER,
     )
-    try:
-        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise credentials_exception
-    return user
 
-def recieve_jwt(token: str):
-    return jwt.decode(token, secret_key, algorithm)
+def new_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def set_auth_cookies(response, token: str, csrf_token: str) -> None:
+    common = {
+        "secure": cookie_secure(),
+        "samesite": "lax",
+        "path": "/",
+    }
+    max_age = int(os.getenv("AUTH_SESSION_MINUTES", "480")) * 60
+    response.set_cookie(
+        "access_token", token, httponly=True, max_age=max_age, **common
+    )
+    response.set_cookie(
+        "csrf_token", csrf_token, httponly=False, max_age=max_age, **common
+    )
+
+
+def clear_auth_cookies(response) -> None:
+    response.delete_cookie("access_token", path="/", secure=cookie_secure(), samesite="lax")
+    response.delete_cookie("csrf_token", path="/", secure=cookie_secure(), samesite="lax")

@@ -12,6 +12,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -34,13 +35,19 @@ from backend.models import (  # noqa: E402,F401  (imported for table registratio
     db_event,
     db_integrationtokens,
     db_processedmessage,
+    db_scanjob,
+    db_applicationaction,
 )
 from backend.models.db_users import User  # noqa: E402
 
 
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite://")
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine, autoflush=True)()
     try:
@@ -51,7 +58,7 @@ def db():
 
 @pytest.fixture()
 def user_id(db):
-    user = User(id=uuid.uuid4(), email="applicant@example.com", hashed_password="x")
+    user = User(id=uuid.uuid4(), email="applicant@example.com")
     db.add(user)
     db.commit()
     return user.id

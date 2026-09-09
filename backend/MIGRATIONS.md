@@ -39,7 +39,8 @@ user/provider tokens, and duplicate application/source-message events before
 changing any data. Resolve those conflicts deliberately on the restored copy;
 no automatic row deletion or token selection is performed. It maps `sent` to
 `applied`. Supported statuses are `applied`, `process`, `assessment`, `interview`,
-`offer`, and `rejected`; additional outcomes remain milestone 8 work.
+`offer`, `accepted`, `withdrawn`, and `rejected`. Revision 0008 also adds
+application archival timestamps and encrypted reversible action history.
 
 Legacy timestamps without offsets are interpreted as UTC. PostgreSQL conversion
 uses an explicit `AT TIME ZONE 'UTC'`, independent of the database session timezone.
@@ -76,6 +77,10 @@ encrypts existing application details, Gmail identifiers and credentials,
 event details, and recruiter headers. It also replaces plaintext Gmail-ID
 indexes with keyed lookup indexes. The migration is forward-only; recovery
 requires both the pre-migration backup and its matching application version.
+
+Revision `0007_background_scan_jobs` adds the durable Gmail scan queue. Apply
+it before starting `backend.scan_worker`; the worker does not create tables at
+runtime. Existing application and Gmail ledger rows are unchanged.
 
 These initial revisions are forward-only. Recover by restoring the backup and
 the matching application version. `backend.create_tables` now delegates to

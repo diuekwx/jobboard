@@ -9,7 +9,11 @@ import uuid
 class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (
-        CheckConstraint("status IN ('applied', 'process', 'assessment', 'interview', 'offer', 'rejected')", name="ck_application_status"),
+        CheckConstraint(
+            "status IN ('applied', 'process', 'assessment', 'interview', 'offer', "
+            "'accepted', 'withdrawn', 'rejected')",
+            name="ck_application_status",
+        ),
         UniqueConstraint("user_id", "gmail_thread_lookup", name="uq_application_user_thread_lookup"),
     )
 
@@ -20,6 +24,7 @@ class Application(Base):
     position: Mapped[Optional[str]] = mapped_column(EncryptedText("applications.position"), nullable=True)
     application_date: Mapped[date] = mapped_column(Date, default=lambda: datetime.now(timezone.utc).date())
     status: Mapped[str] = mapped_column(String(20), default="applied")
+    archived_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime(), nullable=True)
 
     # provenance / dedup
     source: Mapped[str] = mapped_column(String(20), default="manual")  # "manual" | "email"

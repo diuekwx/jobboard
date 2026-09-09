@@ -16,18 +16,28 @@ Authentication uses JWTs in HTTP-only cookies; Google OAuth uses a signed sessio
 
 Gmail sync fetches and classifies messages, matches applications, persists events, and tracks processed messages. Deterministic rules precede optional LLM fallback. The environment example disables LLM work by default, deferring ambiguous messages until inference is enabled.
 
+Gmail scans are durable database jobs initiated by POST and processed by a
+separate worker. One active slot per user is enforced in the database. Expired
+leases make interrupted jobs reclaimable, while the processed-message ledger
+and chunk transactions preserve completed work. Each job processes a bounded
+mailbox slice and then yields to older waiting users. Gmail details use a small
+thread pool with a separate Google client transport per task; classification
+uses one process-wide slot and application writes remain ordered. The supported
+initial deployment runs exactly one scan worker, which makes that inference
+slot global without adding a distributed lock service.
+
 ## Reproducible verification
 
 Pin runtimes and resolved dependencies, recreate Python environments, and use npm ci. Keep credentials, databases, caches, builds, and local agent tooling out of Git. Tests use in-memory SQLite and fake Gmail, disable dotenv loading, and substitute the LLM client to avoid personal mailbox state and external services.
 
-Backend tests and frontend TypeScript/lint/build form the baseline gate. A startup/register/login smoke test covers runtime dependencies and password hashing that classification tests alone cannot verify. Frontend unit tests and a Python lint policy are not yet implemented.
+Backend tests and frontend TypeScript/lint/build form the baseline gate. A startup/auth-boundary smoke test verifies that local password endpoints are unavailable and protected routes require a Google-authenticated session. Frontend unit tests and a Python lint policy are not yet implemented.
 
 ## Verification record (2026-09-05)
 
 Exported the staged baseline using `git checkout-index` into an ignored clean directory, created an empty Python environment, and installed both dependency sets from their locks:
 
 - Python 3.13.7: pinned install and `pip check` passed.
-- Backend: 102 tests passed, including registration, login, and authenticated user lookup.
+- Backend tests cover the Google-only authentication boundary and authenticated user lookup.
 - Node 22.13.0 / npm 11.6.0: `npm ci`, TypeScript, ESLint, and production build passed. npm 10.9.2 also passed the initial local lint/typecheck.
 - Copied the safe environment example, generated local secrets, initialized SQLite, and confirmed API startup.
 - The shared working tree also passed 115 tests after concurrent database-foundation changes. Those additional changes are outside this staged baseline.

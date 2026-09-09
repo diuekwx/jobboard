@@ -13,6 +13,7 @@ from backend.service.classification_service import (
     classify_email,
     looks_like_next_stage,
     run_rules,
+    _to_classification,
 )
 
 FROM = "Acme Careers <no-reply@acme.com>"
@@ -178,4 +179,72 @@ def test_the_assessment_vendor_never_becomes_the_company():
         "Please complete the online assessment for Acme within 5 days.",
     )
     assert rule.kind == KIND_ASSESSMENT
-    assert (rule.company or "").lower() != "hackerrank"
+    assert rule.company == "Acme"
+
+
+@pytest.mark.parametrize(
+    ("from_header", "platform"),
+    [
+        ("CoderPad <noreply@coderpad.io>", "CoderPad"),
+        ("Coderbyte <noreply@coderbyte.com>", "Coderbyte"),
+        ("CodeSignal <no-reply@codesignal.com>", "CodeSignal"),
+    ],
+)
+def test_a_standalone_assessment_platform_name_is_not_an_employer(
+    from_header, platform
+):
+    rule = run_rules(
+        from_header,
+        f"Your {platform} assessment",
+        "Please complete the online assessment within five days.",
+    )
+
+    assert rule.kind == KIND_ASSESSMENT
+    assert rule.company is None
+
+
+def test_employer_before_via_platform_is_kept():
+    rule = run_rules(
+        "Globex via CoderPad <noreply@coderpad.io>",
+        "Your coding assessment",
+        "Please complete the online assessment within five days.",
+    )
+
+    assert rule.company == "Globex"
+
+
+def test_employer_is_read_from_platform_invitation_subject():
+    rule = run_rules(
+        "Coderbyte <do-not-reply@coderbyte.com>",
+        "Netic AI invites you to take an assessment",
+        "Please complete the online assessment.",
+    )
+
+    assert rule.kind == KIND_ASSESSMENT
+    assert rule.company == "Netic AI"
+
+
+def test_submitted_assessment_receipt_uses_employer_and_advances():
+    rule = run_rules(
+        "Coderbyte <do-not-reply@coderbyte.com>",
+        "Assessment submitted for Clerkie",
+        (
+            "This is your confirmation email letting you know that you have "
+            "successfully submitted your answers for the Clerkie assessment."
+        ),
+    )
+
+    assert rule.kind == KIND_ASSESSMENT
+    assert rule.company == "Clerkie"
+
+
+def test_a_platform_returned_by_the_model_is_not_accepted_as_the_employer():
+    result = _to_classification({
+        "category": "assessment",
+        "company": "Coderbyte",
+        "role": "Software Developer",
+        "confidence": "high",
+    })
+
+    assert result is not None
+    assert result.company == ""

@@ -19,7 +19,9 @@ interface KanbanCardProps {
   permalink?: string | null;
   needsReview?: boolean;
   rejectedAt?: string | null;
+  outcomeAt?: string | null;
   nextEvent?: ApplicationEvent | null;
+  onManage: () => void;
 }
 
 /** "in 7d" / "tomorrow" / "today" / "4d ago" — the countdown that makes the
@@ -44,10 +46,14 @@ const KanbanCard = ({
   permalink,
   needsReview,
   rejectedAt,
+  outcomeAt,
   nextEvent,
+  onManage,
 }: KanbanCardProps) => {
   const name = company || "—";
-  const closed = status === "rejected" ? dayOf(rejectedAt) : "";
+  const closed = ["rejected", "withdrawn"].includes(stage)
+    ? dayOf(outcomeAt ?? rejectedAt)
+    : "";
   const label = status === "process" ? stageLabel(stage) : "";
   const when = nextEvent?.at ? momentOf(nextEvent.at) : "";
   const due = countdown(nextEvent?.at);
@@ -90,7 +96,7 @@ const KanbanCard = ({
 
       <span className="entry__meta" title={id}>
         {role ? `${role} · ` : ""}applied {dayOf(date)}
-        {closed ? ` · closed ${closed}` : ""}
+        {closed ? ` · ${stage} ${closed}` : ""}
       </span>
 
       {label && (
@@ -110,6 +116,7 @@ const KanbanCard = ({
           {!when && <span className="entry__when">no date given</span>}
         </span>
       )}
+      <button className="entry__manage" onClick={onManage}>Manage</button>
     </div>
   );
 };

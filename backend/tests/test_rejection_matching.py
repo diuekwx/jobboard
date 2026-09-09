@@ -100,7 +100,7 @@ def test_does_not_reach_across_users(db, user_id):
     from backend.models.db_users import User
     import uuid
 
-    other = User(id=uuid.uuid4(), email="someone@example.com", hashed_password="x")
+    other = User(id=uuid.uuid4(), email="someone@example.com")
     db.add(other)
     db.commit()
     make_app(db, other.id, company="Acme")

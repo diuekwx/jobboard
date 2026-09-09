@@ -1,6 +1,6 @@
 # Deployment roadmap
 
-Last updated: 2026-09-05
+Last updated: 2026-09-07
 
 ## Agreed direction
 
@@ -115,38 +115,75 @@ exercised.
 
 ## 6. Background scanning and bounded concurrency
 
-- [ ] Move scans into durable jobs and initiate scans with POST.
-- [ ] Allow one active sync per user and recover jobs after worker restarts.
-- [ ] Fetch Gmail messages with a small concurrency limit, respecting API quotas.
-- [ ] Start with one global local-model inference slot and fair scheduling across users.
-- [ ] Keep database sessions and Google client transports out of unsafe shared concurrent use.
-- [ ] Apply database updates in a controlled order with deduplication safeguards.
-- [ ] Show job progress and partial results without discarding existing applications.
+- [x] Move scans into durable jobs and initiate scans with POST.
+- [x] Allow one active sync per user and recover jobs after worker restarts.
+- [x] Fetch Gmail messages with a small concurrency limit, respecting API quotas.
+- [x] Start with one global local-model inference slot and fair scheduling across users.
+- [x] Keep database sessions and Google client transports out of unsafe shared concurrent use.
+- [x] Apply database updates in a controlled order with deduplication safeguards.
+- [x] Show job progress and partial results without discarding existing applications.
 
 **Done when:** scanning survives closing the page and restarting the worker without losing completed work.
 
+**2026-09-07 implementation:** Added database-backed scan jobs, atomic per-user
+active slots, worker leases and expired-job recovery, POST initiation and
+progress endpoints. The single worker processes capped slices in oldest-served
+order so another user's queued scan gets a turn before a large mailbox resumes.
+Gmail fetches use four isolated client transports by default; model inference
+has one guarded slot; database effects stay timestamp-ordered and commit with
+job progress in chunks. The dashboard polls progress and refreshes partial
+results without replacing the existing board. Automated SQLite/fake-Gmail tests
+cover active-job uniqueness, recovery, durable progress, bounded continuation,
+fair yielding, and the existing interruption/deduplication behavior. The worker
+and Gmail concurrency have not been exercised against the live Gmail API, and
+the supported initial deployment is exactly one scan worker.
+
 ## 7. Authentication and account controls
 
-- [ ] Require production secrets and HTTPS cookie settings; remove insecure fallbacks and sensitive OAuth logging.
-- [ ] Clean up OAuth state handling and duplicate authentication paths.
-- [ ] Add CSRF protection appropriate to cookie authentication and rate limits.
-- [ ] Implement logout and Gmail disconnect/reconnect, including credential revocation/removal as appropriate.
-- [ ] Implement account deletion and define backup-retention behavior.
-- [ ] Finish registration or explicitly simplify the initial release to Google sign-in.
-- [ ] Test cross-user data isolation and authentication failure paths.
+- [x] Require production secrets and HTTPS cookie settings; remove insecure fallbacks and sensitive OAuth logging.
+- [x] Clean up OAuth state handling and duplicate authentication paths.
+- [x] Add CSRF protection appropriate to cookie authentication and rate limits.
+- [x] Implement logout and Gmail disconnect/reconnect, including credential revocation/removal as appropriate.
+- [x] Implement account deletion and define backup-retention behavior.
+- [x] Simplify the initial release to Google sign-in only.
+- [x] Test cross-user data isolation and authentication failure paths.
 
 **Done when:** the account lifecycle and cross-user isolation are verified.
 
+**2026-09-08 implementation:** Added production fail-closed secret/HTTPS
+validation, secure bounded sessions, one-time OAuth state, session-bound CSRF
+and origin checks, and process-local auth/mutation rate limits for the supported
+single-process API deployment. Added logout, Google credential revocation plus
+local disconnect/reconnect, and confirmed account deletion covering owned data.
+The dashboard exposes these controls and redirects expired sessions to sign-in.
+Automated tests cover CSRF failures, one-time OAuth state, authentication
+failures, cross-user application/scan isolation, token ownership, deletion, and
+production configuration rejection. Live Google revocation and the documented
+30-day backup-expiry/restore deletion procedure still require staging rehearsal.
+
 ## 8. Essential product workflows
 
-- [ ] Support adding, editing, and archiving applications and notes.
-- [ ] Add a review queue with correction, merge, and undo actions.
-- [ ] Support offers, accepted, and withdrawn outcomes consistently across processing and UI.
-- [ ] Show source-backed application history.
-- [ ] Handle expired sessions and scan failures without clearing the board.
-- [ ] Add data export and clear onboarding.
+- [x] Support adding, editing, and archiving applications and notes.
+- [x] Add a review queue with correction, merge, and undo actions.
+- [x] Support offers, accepted, and withdrawn outcomes consistently across processing and UI.
+- [x] Show source-backed application history.
+- [x] Handle expired sessions and scan failures without clearing the board.
+- [x] Add data export and clear onboarding.
 
 **Done when:** users can correct automation mistakes and manage their search without database intervention.
+
+**2026-09-09 implementation:** Added manual add/edit/notes, archive/restore,
+accepted and withdrawn terminal outcomes, and offer-email classification. Added
+a review queue with corrections, duplicate merge, encrypted undo records, and
+undo for edits/corrections/archive/restore/merge. Application history combines
+reversible user actions with Gmail-ledger entries linking to their source
+messages. The dashboard preserves the last loaded board on API/scan failures,
+redirects expired sessions, provides first-run onboarding, and downloads a JSON
+export of active and archived records without credentials. Revision 0008 adds
+the status constraint, archival timestamp, and encrypted action table.
+Automated backend tests cover the workflows, source links, offer detection, and
+migration convergence; frontend typecheck, lint, and production build verify
+the UI. Live Gmail offer variants and browser interaction remain staging checks.
 
 ## 9. Local inference evaluation and tuning
 
