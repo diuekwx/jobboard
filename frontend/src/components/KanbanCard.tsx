@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   dayOf,
   daysUntil,
@@ -21,6 +22,9 @@ interface KanbanCardProps {
   rejectedAt?: string | null;
   outcomeAt?: string | null;
   nextEvent?: ApplicationEvent | null;
+  highlighted?: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
   onManage: () => void;
 }
 
@@ -48,8 +52,12 @@ const KanbanCard = ({
   rejectedAt,
   outcomeAt,
   nextEvent,
+  highlighted,
+  onDragStart,
+  onDragEnd,
   onManage,
 }: KanbanCardProps) => {
+  const cardRef = useRef<HTMLDivElement>(null);
   const name = company || "—";
   const closed = ["rejected", "withdrawn"].includes(stage)
     ? dayOf(outcomeAt ?? rejectedAt)
@@ -58,12 +66,29 @@ const KanbanCard = ({
   const when = nextEvent?.at ? momentOf(nextEvent.at) : "";
   const due = countdown(nextEvent?.at);
 
+  useEffect(() => {
+    if (!highlighted || !cardRef.current) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    cardRef.current.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+  }, [highlighted]);
+
   return (
     <div
-      className={`entry entry--${status}${needsReview ? " entry--review" : ""}`}
+      ref={cardRef}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", id);
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+      className={`entry entry--${status}${needsReview ? " entry--review" : ""}${highlighted ? " entry--highlight" : ""}`}
       style={{ animationDelay: `${Math.min(index, 14) * 26}ms` }}
     >
-      <span className="entry__idx">{String(index + 1).padStart(3, "0")}</span>
+      <span className="entry__idx">
+        <span className="entry__drag" aria-hidden="true">⠿</span>
+        {String(index + 1).padStart(3, "0")}
+      </span>
 
       <span className="entry__co">
         {permalink ? (
@@ -84,13 +109,15 @@ const KanbanCard = ({
           name
         )}
         {needsReview && (
-          <span
+          <button
+            type="button"
             className="entry__flag"
             title="Company/role was auto-guessed from the email — please verify"
+            aria-label="Needs confirmation"
+            onClick={onManage}
           >
-            {" "}
-            ?
-          </span>
+            ⚠
+          </button>
         )}
       </span>
 

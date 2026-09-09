@@ -199,6 +199,15 @@ a {
 .btn--danger:hover {
   text-decoration: line-through;
 }
+.btn--warning {
+  min-width: 2.7rem;
+  padding-inline: 0.7rem;
+  border-style: dashed;
+}
+.btn--warning span {
+  font-size: 0.95rem;
+  line-height: 0;
+}
 .account-actions {
   margin-top: 0.85rem;
 }
@@ -228,64 +237,8 @@ a {
   font-size: 0.78rem;
 }
 
-/* One email-derived record at a time keeps the correction work deliberate. */
-.review-queue {
-  max-width: 44rem;
-  border: 1px solid var(--ink);
-}
-.review-queue__head {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: start;
-  padding: 0.9rem 1rem;
-  border-bottom: 1px solid var(--ink);
-}
-.review-queue__head p {
-  max-width: 34rem;
-  margin: 0.35rem 0 0;
-  font-size: 0.84rem;
-  color: var(--muted);
-}
-.review-queue__count {
-  flex: none;
-  font-family: var(--f-mono);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-.review-queue__record {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem;
-}
-.review-queue__record strong,
-.review-queue__record span {
-  display: block;
-}
-.review-queue__record strong {
-  font-size: 1rem;
-  letter-spacing: -0.01em;
-}
-.review-queue__record span {
-  margin-top: 0.14rem;
-  font-family: var(--f-mono);
-  font-size: 0.72rem;
-  color: var(--muted);
-}
-.review-queue__nav {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.55rem 1rem;
-  border-top: 1px solid var(--hair);
-}
 @media (max-width: 640px) {
   .editor__grid { grid-template-columns: 1fr; }
-  .review-queue__record { align-items: flex-start; flex-direction: column; }
-  .review-queue__record .btn { width: 100%; }
 }
 
 :where(.btn, .field, a, input, button):focus-visible {
@@ -318,6 +271,20 @@ a {
 .field[type="date"] {
   width: 12rem;
   color-scheme: light dark;
+}
+/* Native option menus need an explicit scheme; otherwise dark pages can open
+   a bright system list that ignores the field's surrounding palette. */
+select.field {
+  color-scheme: light;
+}
+select.field option {
+  background: var(--field);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  select.field {
+    color-scheme: dark;
+  }
 }
 
 /* ---- Dot-leader tally ----------------------------------- */
@@ -510,6 +477,21 @@ a {
   background: var(--ink);
   color: var(--paper);
 }
+.entry[draggable="true"] {
+  cursor: grab;
+}
+.entry[draggable="true"]:active {
+  cursor: grabbing;
+}
+.entry--highlight {
+  animation: review-pulse 0.7s ease-in-out 3;
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+@keyframes review-pulse {
+  0%, 100% { background: var(--paper); color: var(--ink); }
+  50% { background: var(--ink); color: var(--paper); }
+}
 
 @keyframes rise {
   from {
@@ -527,10 +509,32 @@ a {
   font-size: 0.72rem;
   opacity: 0.5;
 }
+.entry__drag {
+  display: inline-block;
+  margin-right: 0.22rem;
+  font-size: 0.9rem;
+  line-height: 0;
+  transform: translateY(0.07rem);
+}
 .entry__co {
   grid-column: 2;
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+.entry__flag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.18rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.78em;
+  line-height: 1;
+  cursor: pointer;
+}
+.entry__flag:hover {
+  text-decoration: underline;
 }
 .entry__meta {
   grid-column: 2;
