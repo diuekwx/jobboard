@@ -16,7 +16,9 @@ const columns: { id: ApplicationStatus; title: string }[] = [
 type KanbanBoardProps = {
   apps: Application[];
   loading?: boolean;
+  highlightedId?: string | null;
   onManage: (application: Application) => void;
+  onMove: (application: Application, status: ApplicationStatus) => void;
 };
 
 type PaneProps = {
@@ -24,7 +26,11 @@ type PaneProps = {
   status: ApplicationStatus;
   entries: Application[];
   loading?: boolean;
+  highlightedId?: string | null;
   onManage: (application: Application) => void;
+  onDropApplication: (status: ApplicationStatus) => void;
+  onDragStart: (application: Application) => void;
+  onDragEnd: () => void;
 };
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -77,7 +83,7 @@ const PaneLoading = () => (
   </div>
 );
 
-const Pane = ({ title, status, entries, loading, onManage }: PaneProps) => {
+const Pane = ({ title, status, entries, loading, highlightedId, onManage, onDropApplication, onDragStart, onDragEnd }: PaneProps) => {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const ordered = orderFor(status, entries);
@@ -92,7 +98,14 @@ const Pane = ({ title, status, entries, loading, onManage }: PaneProps) => {
     : ordered;
 
   return (
-    <section className="pane">
+    <section
+      className="pane"
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDropApplication(status);
+      }}
+    >
       <header className="pane__head">
         <span className="eyebrow">{title}</span>
         <span className="pane__count">
@@ -140,6 +153,9 @@ const Pane = ({ title, status, entries, loading, onManage }: PaneProps) => {
               rejectedAt={item.rejected_at}
               outcomeAt={item.outcome_at}
               nextEvent={item.next_event}
+              highlighted={item.id === highlightedId}
+              onDragStart={() => onDragStart(item)}
+              onDragEnd={onDragEnd}
               onManage={() => onManage(item)}
             />
           ))
@@ -149,7 +165,14 @@ const Pane = ({ title, status, entries, loading, onManage }: PaneProps) => {
   );
 };
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading, onManage }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading, highlightedId, onManage, onMove }) => {
+  const [dragged, setDragged] = useState<Application | null>(null);
+
+  const dropApplication = (status: ApplicationStatus) => {
+    if (dragged && paneFor(dragged.status) !== status) onMove(dragged, status);
+    setDragged(null);
+  };
+
   return (
     <div className="panes">
       {columns.map((col) => (
@@ -158,7 +181,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ apps, loading, onManage }) =>
           title={col.title}
           status={col.id}
           loading={loading}
+          highlightedId={highlightedId}
           entries={apps.filter((item) => paneFor(item.status) === col.id)}
+          onDropApplication={dropApplication}
+          onDragStart={setDragged}
+          onDragEnd={() => setDragged(null)}
           onManage={onManage}
         />
       ))}

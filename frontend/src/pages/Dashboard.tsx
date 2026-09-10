@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import KanbanBoard from "../components/Kanban";
 import { apiFetch } from "../api/api";
 import DateInput from "../components/DateInput";
-import { momentOf, paneFor, type Application } from "../types";
+import { momentOf, paneFor, type Application, type ApplicationStatus } from "../types";
 
 interface APIResponse {
   message: string;
@@ -54,9 +54,9 @@ const Dashboard = () => {
   const [archived, setArchived] = useState<Application[]>([]);
   const [selected, setSelected] = useState<Application | null>(null);
   const [creating, setCreating] = useState(false);
+  const [highlightedApplicationId, setHighlightedApplicationId] = useState<string | null>(null);
   const [form, setForm] = useState(blankForm);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [reviewIndex, setReviewIndex] = useState(0);
   const appliedRef = useRef(0);
 
   const listAllJobs = useCallback(async () => {
@@ -120,12 +120,8 @@ const Dashboard = () => {
 
   const scanning = scan?.status === "queued" || scan?.status === "running";
   const scanId = scan?.id;
-  const reviewApps = useMemo(() => apps.filter((app) => app.needs_review), [apps]);
-  const reviewApp = reviewApps[reviewIndex] ?? reviewApps[0];
-
-  useEffect(() => {
-    setReviewIndex((index) => Math.min(index, Math.max(reviewApps.length - 1, 0)));
-  }, [reviewApps.length]);
+  const reviewApps = apps.filter((app) => app.needs_review);
+  const reviewApp = reviewApps[0];
 
   useEffect(() => {
     if (!scanning || !scanId) return;
@@ -235,13 +231,15 @@ const Dashboard = () => {
   const openNew = () => {
     setSelected(null);
     setCreating(true);
+    setHighlightedApplicationId(null);
     setHistory([]);
     setForm(blankForm);
   };
 
-  const openApplication = async (app: Application) => {
+  const openApplication = async (app: Application, focusReview = false) => {
     setCreating(false);
     setSelected(app);
+    setHighlightedApplicationId(focusReview ? app.id : null);
     setForm({
       company: app.company ?? "",
       role: app.role ?? "",
@@ -257,6 +255,7 @@ const Dashboard = () => {
   const closeEditor = () => {
     setCreating(false);
     setSelected(null);
+    setHighlightedApplicationId(null);
     setHistory([]);
   };
 
@@ -287,17 +286,52 @@ const Dashboard = () => {
 
   const archiveSelected = async () => {
     if (!selected) return;
-    const response = await apiFetch(`/job/${selected.id}/archive`, { method: "POST" });
-    if (response.ok) {
-      closeEditor();
-      await Promise.all([listAllJobs(), loadArchived()]);
-      setNote("Application archived");
+    const saveResponse = await apiFetch(`/job/${selected.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        company: form.company,
+        position: form.role || null,
+        status: form.status,
+      }),
+    });
+    if (!saveResponse.ok) {
+      const problem = await saveResponse.json().catch(() => null);
+      setNote(problem?.detail ?? "Changes could not be saved; application was not archived");
+      return;
     }
+
+    const archiveResponse = await apiFetch(`/job/${selected.id}/archive`, { method: "POST" });
+    if (!archiveResponse.ok) {
+      setNote("Changes saved, but the application could not be archived");
+      return;
+    }
+
+    closeEditor();
+    await Promise.all([listAllJobs(), loadArchived()]);
+    setNote("Changes saved and application archived");
   };
 
   const restoreApplication = async (app: Application) => {
     const response = await apiFetch(`/job/${app.id}/restore`, { method: "POST" });
     if (response.ok) await Promise.all([listAllJobs(), loadArchived()]);
+  };
+
+  const moveApplication = async (app: Application, lane: ApplicationStatus) => {
+    const status = lane === "sent" ? "applied" : lane;
+    const response = await apiFetch(`/job/${app.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!response.ok) {
+      setNote("Application could not be moved");
+      return;
+    }
+    if (selected?.id === app.id) setSelected({ ...selected, status });
+    await listAllJobs();
+    setHighlightedApplicationId(app.id);
+    setNote(`Moved ${app.company || "application"} to ${lane === "sent" ? "Sent" : lane === "process" ? "In process" : "Rejected"}`);
   };
 
   const undo = async (actionId: string) => {
@@ -307,18 +341,6 @@ const Dashboard = () => {
       closeEditor();
       setNote("Change undone");
     }
-  };
-
-  const exportData = async () => {
-    const response = await apiFetch("/job/export/data");
-    if (!response.ok) return;
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "job-data-export.json";
-    anchor.click();
-    URL.revokeObjectURL(url);
   };
 
   const tally = useMemo(() => {
@@ -472,7 +494,16 @@ const Dashboard = () => {
         )}
         <div className="row account-actions">
           <button className="btn btn--solid" onClick={openNew}>Add application</button>
-          <button className="btn" onClick={exportData}>Export data</button>
+          {reviewApp && (
+            <button
+              className="btn btn--warning"
+              onClick={() => openApplication(reviewApp, true)}
+              aria-label={`Review ${reviewApps.length} application${reviewApps.length === 1 ? "" : "s"} needing confirmation`}
+              title={`${reviewApps.length} application${reviewApps.length === 1 ? "" : "s"} need confirmation`}
+            >
+              <span aria-hidden="true">⚠</span> {reviewApps.length}
+            </button>
+          )}
           <button className="btn" onClick={gmailConnected ? disconnect : beginGoogle}>
             {gmailConnected ? "Disconnect Gmail" : "Reconnect Gmail"}
           </button>
@@ -505,7 +536,10 @@ const Dashboard = () => {
             <button className="btn btn--solid" disabled={!form.company.trim()} onClick={() => saveApplication(Boolean(selected?.needs_review))}>
               {selected?.needs_review ? "Save correction" : "Save"}
             </button>
-            {selected && <button className="btn" onClick={archiveSelected}>Archive</button>}
+            {selected && <button className="btn" disabled={!form.company.trim()} onClick={archiveSelected}>Save and archive</button>}
+            {selected?.permalink && (
+              <a className="btn" href={selected.permalink} target="_blank" rel="noreferrer">Open source email</a>
+            )}
           </div>
           {selected && (
             <div className="stack-1">
@@ -523,45 +557,21 @@ const Dashboard = () => {
         </section>
       )}
 
-      {reviewApp && (
-        <section className="review-queue" aria-labelledby="review-queue-title">
-          <div className="review-queue__head">
-            <div>
-              <span className="eyebrow" id="review-queue-title">Needs confirmation</span>
-              <p>We filled this from an email. Check the company and role before relying on it.</p>
-            </div>
-            <span className="review-queue__count" aria-label={`${reviewIndex + 1} of ${reviewApps.length} items`}>
-              {String(reviewIndex + 1).padStart(2, "0")} / {String(reviewApps.length).padStart(2, "0")}
-            </span>
-          </div>
-          <div className="review-queue__record">
-            <div>
-              <strong>{reviewApp.company || "Company not identified"}</strong>
-              <span>{reviewApp.role || "Role not identified"}</span>
-            </div>
-            <button className="btn btn--solid" onClick={() => openApplication(reviewApp)}>Review details</button>
-          </div>
-          {reviewApps.length > 1 && (
-            <div className="review-queue__nav" aria-label="Review queue navigation">
-              <button className="btn btn--quiet" disabled={reviewIndex === 0} onClick={() => setReviewIndex((index) => index - 1)}>Previous</button>
-              <button className="btn btn--quiet" disabled={reviewIndex === reviewApps.length - 1} onClick={() => setReviewIndex((index) => index + 1)}>Next</button>
-            </div>
-          )}
-        </section>
-      )}
-
       <section className="stack-1">
         <div className="row row--between row--baseline">
           <span className="eyebrow">Pipeline</span>
-          {note && (
-            <span className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-              {scanning && scan
-                ? `${scan.phase} · ${scan.progress.applied}/${scan.progress.discovered}`
-                : note}
-            </span>
-          )}
+          <div className="row">
+            {highlightedApplicationId && <span className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>Highlighted application</span>}
+            {note && (
+              <span className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+                {scanning && scan
+                  ? `${scan.phase} · ${scan.progress.applied}/${scan.progress.discovered}`
+                  : note}
+              </span>
+            )}
+          </div>
         </div>
-        <KanbanBoard apps={apps} onManage={openApplication} />
+        <KanbanBoard apps={apps} highlightedId={highlightedApplicationId} onManage={openApplication} onMove={moveApplication} />
       </section>
 
       {archived.length > 0 && (
